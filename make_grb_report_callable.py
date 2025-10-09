@@ -1,0 +1,421 @@
+from astropy.io.fits import getdata, getheader
+from astropy.time import Time
+from numpy import where, diff, convolve, ones, array, histogram, polyfit, polyval
+from nustar_gen import info, utils
+
+from matplotlib import pyplot as plt
+
+from astropy.visualization import time_support
+from astropy.coordinates import SkyCoord
+
+import matplotlib.dates as mdates
+from matplotlib.patches import Rectangle
+from matplotlib.path import Path
+import matplotlib.patches as patches
+
+import pandas as pd
+import os
+from astropy import units as u
+
+from skyfield.api import EarthSatellite, Loader
+
+import nustar_pysolar.io as io
+import matplotlib
+
+font = {"size": 8}
+matplotlib.rc("font", **font)
+
+
+def make_report(grbtime, grb_ra, grb_dec, name):
+    grb_met = ns.time_to_met(grbtime)
+    trange = 600
+    lowlim = grb_met - 0.5 * trange
+    highlim = grb_met + 0.5 * trange
+
+    tbins = int(trange / 5)  # 5 second bins
+
+    infile = "aft.txt"
+    with open(infile, "r") as f:
+        for line in f:
+            if line.startswith(";"):
+                continue
+            #        print(line)
+            fields = line.split("|")[0].split(" ")[1:]
+            t0 = Time(fields[0], format="yday")
+            t1 = Time(fields[2], format="yday")
+            if (grbtime.mjd > t0.mjd) & (grbtime.mjd < t1.mjd):
+                break
+
+    seqid = fields[2]
+    #    print(seqid)
+
+    infile = "observing_schedule.txt"
+    with open(infile, "r") as f:
+        for line in f:
+            if seqid in line:
+                fields = line.split()
+                break
+    if fields[4] == "NULL":
+        return
+
+    ra_target = float(fields[4])
+    dec_target = float(fields[5])
+    target_coord = SkyCoord(ra_target, dec_target, unit=(u.deg, u.deg))
+
+    #    print(grb_ra, grb_dec)
+    good = True
+    set = True
+    try:
+        coord = SkyCoord(grb_ra, grb_dec, unit=(u.deg, u.deg))
+    except:
+        #        print('Skipping visibility check')
+        set = False
+
+    if set:
+        sep = grb_visibility(grbtime, coord)
+        print(f"Separation from geocenter: {sep:8.2f}")
+        if sep.deg < 45:
+            good = False
+
+        boresight_offset = target_coord.separation(coord).deg
+    else:
+        boresight_offset = -999 * u.deg
+        sep = -999 * u.deg
+    print(f"GRB offset from boreseight: {boresight_offset:8.2f}")
+
+    seqid = fields[2]
+    socname = seqid[0:8] + "_" + fields[3]
+
+    datpath = "data/"+name
+    # datpath = os.path.join(datadir, socname)
+    seqpath = os.path.join(datpath, seqid)
+    print(seqpath)
+    hkdir = os.path.join(seqpath, "hk")
+    evdir = os.path.join(seqpath, "event_cl")
+
+    hka_file = os.path.join(hkdir, f"nu{seqid}A_fpm.hk")
+    hkb_file = os.path.join(hkdir, f"nu{seqid}B_fpm.hk")
+    attorb_file = os.path.join(evdir, f"nu{seqid}A.attorb")
+
+    if not os.path.exists(hka_file):
+        print(f"Missing {hka_file}")
+        return
+
+    hka = getdata(hka_file, "HK1FPM")
+    hkb = getdata(hkb_file, "HK1FPM")
+    hdr = getheader(hka_file)
+
+    attorb = getdata(attorb_file)
+
+    # Trim to just time in range:
+
+    hka = hka[((hka["TIME"] > lowlim) & (hka["TIME"] < highlim))]
+    hkb = hkb[((hkb["TIME"] > lowlim) & (hkb["TIME"] < highlim))]
+
+    if len(hka) < 10:
+        return
+
+    hka_time = ns.met_to_time(hka["TIME"])
+    hkb_time = ns.met_to_time(hkb["TIME"])
+
+    outstr = f"{name},{seqid},{t0.iso},{grbtime.iso},{t1.iso},{boresight_offset:8.2f},{sep:8.2f}"
+
+    #    f2.write(outstr+'\n')
+    print(
+        "Name, SEQID, Start Time, Burst Time, End Time, Offset to Boresight, Separation from Geocenter"
+    )
+    print(outstr)
+
+    # ax.set_ylim([1e-9, 1e-2])
+    # y1, y2 = ax.get_ylim()
+
+    kernel_size = 5
+    kernel = ones(kernel_size) / kernel_size
+    hka_smth = convolve(hka["SHLDLO"], kernel, mode="same")
+    hkb_smth = convolve(hkb["SHLDLO"], kernel, mode="same")
+
+    order = 3
+    parA = polyfit(hka["TIME"], hka_smth, order)
+    parB = polyfit(hkb["TIME"], hkb_smth, order)
+
+    modelA = polyval(parA, hka["TIME"])
+    modelB = polyval(parB, hkb["TIME"])
+
+    ymax_a = hka_smth.max()
+    ymin_a = hka_smth.min()
+    mean_a = hka_smth.mean()
+
+    ymax_b = hkb_smth.max()
+    ymin_b = hkb_smth.min()
+    mean_b = hkb_smth.mean()
+
+    sub_a = hka_smth - modelA
+    sub_b = hkb_smth - modelB
+    ysub_max = sub_a.max()
+
+    eva_file = os.path.join(evdir, f"nu{seqid}A_uf.evt")
+    evb_file = os.path.join(evdir, f"nu{seqid}B_uf.evt")
+    attorb_file = os.path.join(evdir, f"nu{seqid}A.attorb")
+
+    eva, hdra = getdata(eva_file, header=True)
+    evb = getdata(evb_file)
+
+    eva = eva[(eva["TIME"] > lowlim) & (eva["TIME"] < highlim)]
+    evb = evb[(evb["TIME"] > lowlim) & (evb["TIME"] < highlim)]
+
+    ena = array(utils.chan_to_energy(eva["PI"]))
+    enb = array(utils.chan_to_energy(evb["PI"]))
+
+    with time_support(format="iso"):
+        fig, axs = plt.subplots(nrows=3, ncols=2, figsize=(12, 12))
+
+        #        print(axs.shape)
+        ax0 = axs[0, 0]
+        ax1 = axs[1, 0]
+        ax2 = axs[2, 0]
+        ax3 = axs[0, 1]
+        ax4 = axs[1, 1]
+        ax5 = axs[2, 1]
+
+        grb_utc = ns.met_to_time(grb_met)
+        hka_rel = (hka_time - grb_utc).to_value("sec")
+        hkb_rel = (hkb_time - grb_utc).to_value("sec")
+
+        ax0.step(
+            hka_rel, hka["SHLDLO"], label="SHLDLO_A", linewidth=0.5, color="#d8b365"
+        )
+        ax0.step(
+            hkb_rel, hkb["SHLDLO"], label="SHLDLO_B", linewidth=0.5, color="#5ab4ac"
+        )
+
+        ax0.grid()
+        ax0.set_ylim(ymin_a * 0.5, 10e3)
+        ax0.plot([0, 0], [ymin_a * 0.5, 10e3], linestyle="dotted", color="#7fbf7b")
+        ax0.step(
+            hka_rel, hka_smth, label="SHLDLO_A Smoothed", linewidth=0.5, color="#8c510a"
+        )
+        ax0.step(
+            hkb_rel, hkb_smth, label="SHLDLO_B Smoothed", linewidth=0.5, color="#01665e"
+        )
+
+        ax0.legend()
+        ax0.set_yscale("log")
+        ax0.set_title("Shield Rates")
+        ax0.set_xlabel("Seconds from GRB_UTC")
+        ax0.set_ylabel("Counts/s")
+
+        ax1.grid()
+        ax1.step(hka_rel, sub_a, label="SHLDLO A Sub", linewidth=0.5, color="#8c510a")
+        ax1.step(hkb_rel, sub_b, label="SHLDLO B Sub", linewidth=0.5, color="#01665e")
+
+        lims = ax1.get_ylim()
+        ax1.plot([0, 0], lims, linestyle="dotted", color="#7fbf7b")
+
+        ax1.set_xlabel("Seconds from GRB_UTC")
+        ax1.set_title("Shield Rate Detrended")
+        ax1.set_ylabel("Counts/s")
+        ax1.legend()
+
+        ### Solar stuff
+
+        df = pd.read_json(in_goes)
+        df["time_tag"] = pd.to_datetime(df["time_tag"], format="%Y-%m-%dT%H:%M:%SZ")
+
+        tstart = ns.met_to_time(lowlim)
+        tend = ns.met_to_time(highlim)
+
+        df2 = df[
+            (df["energy"] == "0.1-0.8nm")
+            & (df["time_tag"] > tstart.datetime)
+            & (df["time_tag"] < tend.datetime)
+        ]
+
+        ax2.step(df2["time_tag"], df2["flux"], label="GOES-17 XRS 1-min ave")
+        ax2.set_xlim(tstart.datetime, tend.datetime)
+        ax2.set_ylim([1e-7, 1e-3])
+        y1, y2 = ax2.get_ylim()
+        ax2.set_yscale("log")
+        ax22 = ax2.twinx()
+        ax22.yaxis.tick_right()
+        ax22.set_ylim(y1, y2)
+
+        ax22.set_yscale("log")
+        ax22.minorticks_off()
+
+        ax22.set_yticks([1e-8, 1e-7, 1e-6, 1e-5, 1e-4])
+        ax22.set_yticklabels(["A", "B", "C", "M", "X"])
+
+        ax2.legend()
+
+        ## Add on when NuSTAR is in sunlight
+        in_sun = (where(attorb["SUNSHINE"] == 1))[0]
+        di = diff(in_sun)
+        transition = (where(di > 1))[0]
+        # Check to see if you started in sun:
+
+        lims = ax2.get_ylim()
+        height = lims[1] - lims[0]
+        left_edge_ind = 0
+
+        for ind, edge in enumerate(transition):
+            if ind == 0:
+                if in_sun[0] == 0:
+                    left_edge = mdates.date2num(
+                        ns.met_to_time(attorb["TIME"][0]).datetime
+                    )
+                    right_edge = mdates.date2num(
+                        ns.met_to_time(attorb["TIME"][in_sun[edge]]).datetime
+                    )
+                else:
+                    left_edge = mdates.date2num(
+                        ns.met_to_time(attorb["TIME"][in_sun[0]]).datetime
+                    )
+                    right_edge = mdates.date2num(
+                        ns.met_to_time(attorb["TIME"][in_sun[edge]]).datetime
+                    )
+            else:
+                right_edge = mdates.date2num(
+                    ns.met_to_time(attorb["TIME"][in_sun[edge]]).datetime
+                )
+                left_edge = mdates.date2num(
+                    ns.met_to_time(attorb["TIME"][left_edge_ind]).datetime
+                )
+
+            prev_right_edge = in_sun[edge]
+            left_edge_ind = prev_right_edge + di[edge]
+
+            width = right_edge - left_edge
+            rect = Rectangle((left_edge, lims[0]), width, 1, color="yellow", alpha=0.5)
+            ax2.add_patch(rect)
+
+        left_edge = mdates.date2num(
+            ns.met_to_time(attorb["TIME"][left_edge_ind]).datetime
+        )
+        right_edge = mdates.date2num(
+            ns.met_to_time(attorb["TIME"][in_sun].max()).datetime
+        )
+        width = right_edge - left_edge
+
+        rect = Rectangle((left_edge, lims[0]), width, 1, color="yellow", alpha=0.5)
+        ax2.add_patch(rect)
+        ax2.set_title("GOES X-ray Flux")
+
+    ### Geographic plot
+    # Define vertices here:
+    vertices = [[260, -6.25], [350, -6.25], [330, 6.25], [310, 6.25], [260, -6.25]]
+    codes = [
+        Path.MOVETO,
+        Path.LINETO,
+        Path.LINETO,
+        Path.LINETO,
+        Path.CLOSEPOLY,
+    ]
+
+    attorb = attorb[(attorb["TIME"] > lowlim) & (attorb["TIME"] < highlim)]
+
+    saa_path = Path(vertices, codes)
+    ax3.scatter(attorb["SAT_LON"], attorb["SAT_LAT"], s=1.0)
+    ax3.set_xlim(0, 360)
+    ax3.set_ylim(-7, 7)
+    patch = patches.PathPatch(saa_path, facecolor="blue", lw=2, alpha=0.5)
+    ax3.add_patch(patch)
+    ax3.set_xlabel("Longitude")
+    ax3.set_ylabel("Latitude")
+    ax3.set_title("SAA Check")
+
+    ## X-ray counts
+    with time_support(format="iso"):
+        tbins = int(trange / 5)
+        hista, edgesa = histogram(
+            eva[(ena > 100)]["TIME"], range=(lowlim, highlim), bins=tbins
+        )
+        histb, edgesb = histogram(
+            evb[(enb > 100)]["TIME"], range=(lowlim, highlim), bins=tbins
+        )
+
+        widths = edgesa[1] - edgesa[0]
+        centers = (edgesa[:-1] + edgesa[1:]) / 2
+        ct = ns.met_to_time(centers)
+        ct_rel = (ct - grb_utc).to_value("sec")
+        ax4.step(ct_rel, hista, label="FPMA", linewidth=0.5, color="#fc8d59")
+        ax4.step(ct_rel, histb, label="FPMB", linewidth=0.5, color="#4575b4")
+        ax4.set_title(f"E>100 keV, {widths:5.2f}-s bins")
+        lims = ax4.get_ylim()
+
+        ax4.plot([0, 0], lims, linestyle="dotted", color="#7fbf7b")
+        ax4.legend()
+        ax4.set_xlabel("Seconds from GRB_UTC")
+        ax4.set_ylabel("Counts per bin")
+
+        tbins = int(trange / 0.25)
+        hista, edgesa = histogram(
+            eva[(ena > 100)]["TIME"], range=(lowlim, highlim), bins=tbins
+        )
+        histb, edgesb = histogram(
+            evb[(enb > 100)]["TIME"], range=(lowlim, highlim), bins=tbins
+        )
+
+        widths = edgesa[1] - edgesa[0]
+        centers = (edgesa[:-1] + edgesa[1:]) / 2
+        ct = ns.met_to_time(centers)
+        ct_rel = (ct - grb_utc).to_value("sec")
+        ax5.step(ct_rel, hista, label="FPMA", linewidth=0.5, color="#fc8d59")
+        ax5.step(ct_rel, histb, label="FPMB", linewidth=0.5, color="#4575b4")
+        ax5.set_title(f"E>100 keV, {widths:5.2f}-s bins")
+        lims = ax5.get_ylim()
+
+        ax5.plot([0, 0], lims, linestyle="dotted", color="#7fbf7b")
+        ax5.legend()
+        ax5.set_xlabel("Seconds from GRB_UTC")
+        ax5.set_ylabel("Counts per bin")
+
+    grb_number = name.replace("grb", "")
+    # set a title for the whole figure with the GRB name and time
+    fig.suptitle(f"GRB {grb_number}\n{grbtime.iso} UTC", fontsize=16)
+    plt.tight_layout()
+    print(f"Saving data/{name}/grb_report_{grb_number}.pdf")
+    plt.savefig(f"./data/{name}/grb_report_{grb_number}.pdf")
+
+
+def grb_visibility(grbtime, coord):
+    load_path = "./"
+    load = Loader(load_path)
+
+    ts = load.timescale()
+    t = ts.from_astropy(grbtime)
+
+    planets = load("de436.bsp")
+    earth = planets["Earth"]
+
+    # tlefile = io.download_tle(outdir=load_path)
+    tlefile = "NuSTAR.tle"
+    mindt, line1, line2 = io.get_epoch_tle(grbtime.datetime, tlefile)
+    nustar = EarthSatellite(line1, line2)
+    observer = earth + nustar
+
+    astrometric = observer.at(t).observe(earth)
+    this_ra, this_dec, dist = astrometric.radec()
+
+    ra_deg = this_ra.to(u.deg)
+    dec_deg = this_dec.to(u.deg)
+    # print()
+
+    geocen = SkyCoord(ra_deg, dec_deg, unit=(u.deg, u.deg))
+    sep = geocen.separation(coord)
+
+    return sep
+
+
+# Main here
+#
+# grbtime = Time(os.getenv('GRBTIME'))
+# name = os.getenv('GRBNAME')
+# grb_ra = float(os.getenv('GRB_RA'))
+# grb_dec = float(os.getenv('GRB_DEC'))
+in_goes = "xrays-7-day.json"
+ns = info.NuSTAR()
+grbtime = Time("2025-10-07 19:37:51.50")
+name = "grb251007A"
+grb_ra = 128.173
+grb_dec = 21.823
+make_report(grbtime, grb_ra, grb_dec, name)
