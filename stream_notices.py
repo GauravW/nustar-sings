@@ -15,6 +15,7 @@ import os
 import json
 from bs4 import BeautifulSoup
 import sqlite3
+from astropy.time import Time
 
 
 def add_notice_to_db(
@@ -26,6 +27,7 @@ def add_notice_to_db(
     ra=None,
     dec=None,
     error_radius=None,
+    notice_time=None,
 ):
     """
     Add notice details to the SQLite database.
@@ -41,15 +43,16 @@ def add_notice_to_db(
             trigger_time TEXT,
             ra REAL,
             dec REAL,
-            error_radius REAL
+            error_radius REAL,
+            notice_time TEXT
         )
     """)
     cursor.execute(
         """
-        INSERT INTO notices (gcn_topic, mission, trigger_id, trigger_time, ra, dec, error_radius)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO notices (gcn_topic, mission, trigger_id, trigger_time, ra, dec, error_radius, notice_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """,
-        (topic, mission, trigger_ID, trigger_time, ra, dec, error_radius),
+        (topic, mission, trigger_ID, trigger_time, ra, dec, error_radius, notice_time),
     )
     notices_db.commit()
     notices_db.close()
@@ -64,16 +67,25 @@ def parse_calet(notice, topic, db_name):
     p = BeautifulSoup(notice, features="xml")
     wherewhen = p.find("WhereWhen")
     what = p.find("What")
-    trigger_time = wherewhen.find("ISOTime").text
+    trigger_time = str(Time(wherewhen.find("ISOTime").text).isot)
     ra = wherewhen.find("C1").text
     dec = wherewhen.find("C2").text
     error_radius = wherewhen.find("Error2Radius").text
     trigger_ID = what.find("Param", {"name": "TrigID"}).get("value")
+    notice_time = str(Time(p.find("Who").find("Date").text).isot)
     print(
-        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}"
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}, Notice Time: {notice_time}"
     )
     add_notice_to_db(
-        db_name, topic, mission, trigger_ID, trigger_time, ra, dec, error_radius
+        db_name,
+        topic,
+        mission,
+        trigger_ID,
+        trigger_time,
+        ra,
+        dec,
+        error_radius,
+        notice_time,
     )
     return trigger_ID
 
@@ -84,16 +96,25 @@ def parse_fermi(notice, topic, db_name):
     p = BeautifulSoup(notice, features="xml")
     wherewhen = p.find("WhereWhen")
     what = p.find("What")
-    trigger_time = wherewhen.find("ISOTime").text
+    trigger_time = str(Time(wherewhen.find("ISOTime").text).isot)
     ra = wherewhen.find("C1").text
     dec = wherewhen.find("C2").text
     error_radius = wherewhen.find("Error2Radius").text
     trigger_ID = what.find("Param", {"name": "TrigID"}).get("value")
+    notice_time = str(Time(p.find("Who").find("Date").text).isot)
     print(
-        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}"
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}, Notice Time: {notice_time}"
     )
     add_notice_to_db(
-        db_name, topic, mission, trigger_ID, trigger_time, ra, dec, error_radius
+        db_name,
+        topic,
+        mission,
+        trigger_ID,
+        trigger_time,
+        ra,
+        dec,
+        error_radius,
+        notice_time,
     )
     return trigger_ID
 
@@ -104,16 +125,25 @@ def parse_icecube(notice, topic, db_name):
     p = BeautifulSoup(notice, features="xml")
     wherewhen = p.find("WhereWhen")
     what = p.find("What")
-    trigger_time = wherewhen.find("ISOTime").text
+    trigger_time = str(Time(wherewhen.find("ISOTime").text).isot)
     ra = wherewhen.find("C1").text
     dec = wherewhen.find("C2").text
     error_radius = wherewhen.find("Error2Radius").text
     trigger_ID = what.find("Param", {"name": "event_id"}).get("value")
+    notice_time = str(Time(p.find("Who").find("Date").text).isot)
     print(
-        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}"
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}, Notice Time: {notice_time}"
     )
     add_notice_to_db(
-        db_name, topic, mission, trigger_ID, trigger_time, ra, dec, error_radius
+        db_name,
+        topic,
+        mission,
+        trigger_ID,
+        trigger_time,
+        ra,
+        dec,
+        error_radius,
+        notice_time,
     )
     return trigger_ID
 
@@ -128,16 +158,25 @@ def parse_swift(notice, topic, db_name):
     p = BeautifulSoup(notice, features="xml")
     wherewhen = p.find("WhereWhen")
     what = p.find("What")
-    trigger_time = wherewhen.find("ISOTime").text
+    trigger_time = str(Time(wherewhen.find("ISOTime").text).isot)
     ra = wherewhen.find("C1").text
     dec = wherewhen.find("C2").text
     error_radius = wherewhen.find("Error2Radius").text
     trigger_ID = what.find("Param", {"name": "TrigID"}).get("value")
+    notice_time = str(Time(p.find("Who").find("Date").text).isot)
     print(
-        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}"
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}, Notice Time: {notice_time}"
     )
     add_notice_to_db(
-        db_name, topic, mission, trigger_ID, trigger_time, ra, dec, error_radius
+        db_name,
+        topic,
+        mission,
+        trigger_ID,
+        trigger_time,
+        ra,
+        dec,
+        error_radius,
+        notice_time,
     )
     return trigger_ID
 
@@ -148,10 +187,16 @@ def parse_svom_grm(notice, topic, db_name):
     p = BeautifulSoup(notice, features="xml")
     wherewhen = p.find("WhereWhen")
     what = p.find("What")
-    trigger_time = wherewhen.find("ISOTime").text
+    trigger_time = str(Time(wherewhen.find("ISOTime").text).isot)
     trigger_ID = what.find("Param", {"name": "Burst_Id"}).get("value")
-    print(f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}")
-    add_notice_to_db(db_name, topic, mission, trigger_ID, trigger_time)
+    notice_time = p.find("Who").find("Date").text.split("+")[0]
+    notice_time = str(Time(notice_time).isot)
+    print(
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, Notice Time: {notice_time}"
+    )
+    add_notice_to_db(
+        db_name, topic, mission, trigger_ID, trigger_time, notice_time=notice_time
+    )
     return trigger_ID
 
 
@@ -161,33 +206,26 @@ def parse_svom_eclairs(notice, topic, db_name):
     p = BeautifulSoup(notice, features="xml")
     wherewhen = p.find("WhereWhen")
     what = p.find("What")
-    trigger_time = wherewhen.find("ISOTime").text
+    trigger_time = str(Time(wherewhen.find("ISOTime").text).isot)
     trigger_ID = what.find("Param", {"name": "Burst_Id"}).get("value")
     ra = wherewhen.find("C1").text
     dec = wherewhen.find("C2").text
     error_radius = wherewhen.find("Error2Radius").text
+    notice_time = p.find("Who").find("Date").text.split("+")[0]
+    notice_time = str(Time(notice_time).isot)
     print(
-        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}"
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}, Notice Time: {notice_time}"
     )
     add_notice_to_db(
-        db_name, topic, mission, trigger_ID, trigger_time, ra, dec, error_radius
-    )
-    return trigger_ID
-
-
-def parse_einstein_probe(notice, topic, db_name):
-    print("Parsing Einstein Probe notice...")
-    mission = "Einstein-Probe-WXT"
-    trigger_time = notice.get("trigger_time")
-    trigger_ID = notice.get("id")[0]
-    ra = notice.get("ra")
-    dec = notice.get("dec")
-    error_radius = notice.get("ra_dec_error")
-    print(
-        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}"
-    )
-    add_notice_to_db(
-        db_name, topic, mission, trigger_ID, trigger_time, ra, dec, error_radius
+        db_name,
+        topic,
+        mission,
+        trigger_ID,
+        trigger_time,
+        ra,
+        dec,
+        error_radius,
+        notice_time=notice_time,
     )
     return trigger_ID
 
@@ -202,15 +240,49 @@ def parse_ipn(notice, topic, db_name):
         if param.get("value").lower() == "true":
             true_contributor = param.get("name").replace("_contributed", "")
             break
-    mission = "IPN-" + "-".join(true_contributor)
+    mission = "IPN-" + true_contributor
     burst_tjd = what.find("Param", {"name": "Burst_TJD"}).get("value")
-    burst_sod = what.find("Param", {"name": "Burst_SOD"}).get("value")
+    burst_sod = what.find("Param", {"name": "Burst_SOD"}).get("value").split(".")[0]
     trigger_id = f"{burst_tjd}-{burst_sod}"
     wherewhen = p.find("WhereWhen")
-    trigger_time = wherewhen.find("ISOTime").text
-    print(f"Mission: {mission}, Trigger ID: {trigger_id}, Time: {trigger_time}")
-    add_notice_to_db(db_name, topic, mission, trigger_id, trigger_time)
+    trigger_time = str(Time(wherewhen.find("ISOTime").text).isot)
+    notice_time = p.find("Who").find("Date").text
+    notice_time = str(Time(notice_time).isot)
+    print(
+        f"Mission: {mission}, Trigger ID: {trigger_id}, Time: {trigger_time}, Notice Time: {notice_time}"
+    )
+    add_notice_to_db(
+        db_name, topic, mission, trigger_id, trigger_time, notice_time=notice_time
+    )
     return trigger_id
+
+
+def parse_einstein_probe(notice, topic, db_name):
+    print("Parsing Einstein Probe notice...")
+    mission = "Einstein-Probe-WXT"
+    trigger_time = str(Time(notice.get("trigger_time")).isot)
+    trigger_ID = notice.get("id")[0]
+    ra = notice.get("ra")
+    dec = notice.get("dec")
+    error_radius = notice.get("ra_dec_error")
+    notice_time = str(
+        Time.now().isot
+    )  # No notice time in the JSON, so using current time
+    print(
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}, Notice Time: {notice_time}"
+    )
+    add_notice_to_db(
+        db_name,
+        topic,
+        mission,
+        trigger_ID,
+        trigger_time,
+        ra,
+        dec,
+        error_radius,
+        notice_time=notice_time,
+    )
+    return trigger_ID
 
 
 def parse_igwn(notice, topic, db_name):
@@ -222,9 +294,18 @@ def parse_igwn(notice, topic, db_name):
     if "MS" in superevent_id:
         print("Ignoring Mock Superevent notice.")
         return "Ignore"
-    trigger_time = notice.get("event").get("time")  # time can be empty in RETRACTIONS
-    print(f"Mission: {mission}, Superevent ID: {superevent_id}, Time: {trigger_time}")
-    add_notice_to_db(db_name, topic, mission, superevent_id, trigger_time)
+    if alert_type == "RETRACTION":
+        print("Ignoring RETRACTION notice.")  # Let's IGNORE ALL RETRACTIONS for now
+        return "Ignore"
+    trigger_time = str(Time(notice.get("event").get("time")).isot)
+    notice_time = notice.get("time_created")
+    notice_time = str(Time(notice_time).isot)
+    print(
+        f"Mission: {mission}, Superevent ID: {superevent_id}, Time: {trigger_time}, Notice Time: {notice_time}"
+    )
+    add_notice_to_db(
+        db_name, topic, mission, superevent_id, trigger_time, notice_time=notice_time
+    )
     # save skymap in the future if needed (not needed for SINGS)
     return f"{superevent_id}_{alert_type}"
 
@@ -233,9 +314,14 @@ def parse_guano(notice, topic, db_name):
     print("Parsing Guano notice...")
     mission = "Swift-BAT"
     trigger_ID = notice.get("id")[0]
-    trigger_time = notice.get("trigger_time")
-    print(f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}")
-    add_notice_to_db(db_name, topic, mission, trigger_ID, trigger_time)
+    trigger_time = str(Time(notice.get("trigger_time")).isot)
+    notice_time = str(Time(notice.get("alert_datetime")).isot)
+    print(
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, Notice Time: {notice_time}"
+    )
+    add_notice_to_db(
+        db_name, topic, mission, trigger_ID, trigger_time, notice_time=notice_time
+    )
     return trigger_ID
 
 
@@ -244,14 +330,14 @@ def parse_circulars(notice, topic, db_name):
     mission = "GCN-Circulars"
     circ_id = notice.get("circularId")
     subject = notice.get("subject")
-    body = notice.get("body")
+    # body = notice.get("body")
     print(f"Mission: {mission}, Circular ID: {circ_id}, Subject: {subject}")
     # Not adding the circulars to the DB for now.
     # Send slack message only instead later.
     return circ_id
 
 
-def find_mission_from_topic(topic):
+def find_mission_from_topic(topic, mission_parsers):
     """
     Identify mission name from the topic string.
     Returns the mission name or None if not found.
@@ -262,12 +348,12 @@ def find_mission_from_topic(topic):
     return None
 
 
-def parse_notice(topic, notice_value, db_name="gcn_notices_sings.db"):
+def parse_notice(topic, notice_value, mission_parsers, db_name="gcn_notices_sings.db"):
     """
     Parse the incoming notice based on topic.
     Automatically dispatches to the correct mission parser.
     """
-    mission = find_mission_from_topic(topic)
+    mission = find_mission_from_topic(topic, mission_parsers)
     if not mission:
         raise ValueError(f"Could not identify mission from topic: {topic}")
 
@@ -281,7 +367,7 @@ def parse_notice(topic, notice_value, db_name="gcn_notices_sings.db"):
     return result
 
 
-def process_notice(notice_message, db_name="gcn_notices_sings.db"):
+def process_notice(notice_message, mission_parsers, db_name="gcn_notices_sings.db"):
     """
     Process the GCN notice and store it in a SQL database.
     Args:
@@ -295,7 +381,9 @@ def process_notice(notice_message, db_name="gcn_notices_sings.db"):
         if channel_name in vo_topics:
             print("VOEvent notice detected.")
             value_str = notice_message.value().decode("utf-8")
-            ret = parse_notice(channel_name, value_str, db_name=db_name) 
+            ret = parse_notice(
+                channel_name, value_str, mission_parsers, db_name=db_name
+            )
             # ret is used for trigger_ID in naming the file
             if ret == "Ignore":
                 print("VOEvent Notice ignored based on parser decision.")
@@ -316,7 +404,9 @@ def process_notice(notice_message, db_name="gcn_notices_sings.db"):
             print("JSON notice detected.")
             value_str = notice_message.value().decode("utf-8")
             alert_json = json.loads(value_str)
-            ret = parse_notice(channel_name, alert_json, db_name=db_name)
+            ret = parse_notice(
+                channel_name, alert_json, mission_parsers, db_name=db_name
+            )
             # ret is used for trigger_ID in naming the file
             if ret == "Ignore":
                 print("JSON Notice ignored based on parser decision.")
@@ -418,4 +508,4 @@ if __name__ == "__main__":
             # Print the topic and message ID
             print(f"topic={message.topic()}, offset={message.offset()}")
             # Here you can add code to parse the message and store it in a SQL database
-            process_notice(message, notices_db_path)
+            process_notice(message, mission_parsers, notices_db_path)
