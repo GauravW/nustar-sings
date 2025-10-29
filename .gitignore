@@ -5,6 +5,7 @@ observing_schedule.txt
 data/
 aft.txt
 *.aft
+*db
 
 # data files
 .evt
