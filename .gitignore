@@ -4,6 +4,13 @@ de436.bsp
 observing_schedule.txt
 data/
 aft.txt
+*.aft
+
+# data files
+.evt
+.fits
+.attorb
+.hk
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
