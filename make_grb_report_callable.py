@@ -1,8 +1,8 @@
-from astropy.io.fits import getdata, getheader
+from astropy.io.fits import getdata
 from astropy.time import Time
 from numpy import where, diff, convolve, ones, array, histogram, polyfit, polyval
 from nustar_gen import info, utils
-
+import argparse as ag
 from matplotlib import pyplot as plt
 
 from astropy.visualization import time_support
@@ -20,13 +20,20 @@ from astropy import units as u
 from skyfield.api import EarthSatellite, Loader
 
 import nustar_pysolar.io as io
-import matplotlib
 
-font = {"size": 8}
-matplotlib.rc("font", **font)
+# font = {"size": 8}
+# matplotlib.rc("font", **font)
 
 
-def make_report(grbtime, grb_ra, grb_dec, name):
+def make_report(
+    grbtime,
+    grb_ra,
+    grb_dec,
+    name,
+    dest="./data/",
+    data_path="./data/",
+    config_path="./data/",
+):
     grb_met = ns.time_to_met(grbtime)
     trange = 600
     lowlim = grb_met - 0.5 * trange
@@ -34,7 +41,7 @@ def make_report(grbtime, grb_ra, grb_dec, name):
 
     tbins = int(trange / 5)  # 5 second bins
 
-    infile = "aft.txt"
+    infile = f"{config_path}/aft.txt"
     with open(infile, "r") as f:
         for line in f:
             if line.startswith(";"):
@@ -49,7 +56,7 @@ def make_report(grbtime, grb_ra, grb_dec, name):
     seqid = fields[2]
     #    print(seqid)
 
-    infile = "observing_schedule.txt"
+    infile = f"{config_path}/observing_schedule.txt"
     with open(infile, "r") as f:
         for line in f:
             if seqid in line:
@@ -72,8 +79,8 @@ def make_report(grbtime, grb_ra, grb_dec, name):
         set = False
 
     if set:
-        sep = grb_visibility(grbtime, coord)
-        print(f"Separation from geocenter: {sep:8.2f}")
+        sep = grb_visibility(grbtime, coord, config_path)
+        # print(f"Separation from geocenter: {sep:8.2f}")
         if sep.deg < 45:
             good = False
 
@@ -86,10 +93,10 @@ def make_report(grbtime, grb_ra, grb_dec, name):
     seqid = fields[2]
     socname = seqid[0:8] + "_" + fields[3]
 
-    datpath = "data/"+name
+    datpath = f"{data_path}/{socname}"
     # datpath = os.path.join(datadir, socname)
     seqpath = os.path.join(datpath, seqid)
-    print(seqpath)
+    # print(seqpath)
     hkdir = os.path.join(seqpath, "hk")
     evdir = os.path.join(seqpath, "event_cl")
 
@@ -103,7 +110,7 @@ def make_report(grbtime, grb_ra, grb_dec, name):
 
     hka = getdata(hka_file, "HK1FPM")
     hkb = getdata(hkb_file, "HK1FPM")
-    hdr = getheader(hka_file)
+    # hdr = getheader(hka_file)
 
     attorb = getdata(attorb_file)
 
@@ -119,12 +126,6 @@ def make_report(grbtime, grb_ra, grb_dec, name):
     hkb_time = ns.met_to_time(hkb["TIME"])
 
     outstr = f"{name},{seqid},{t0.iso},{grbtime.iso},{t1.iso},{boresight_offset:8.2f},{sep:8.2f}"
-
-    #    f2.write(outstr+'\n')
-    print(
-        "Name, SEQID, Start Time, Burst Time, End Time, Offset to Boresight, Separation from Geocenter"
-    )
-    print(outstr)
 
     # ax.set_ylim([1e-9, 1e-2])
     # y1, y2 = ax.get_ylim()
@@ -217,7 +218,7 @@ def make_report(grbtime, grb_ra, grb_dec, name):
         ax1.legend()
 
         ### Solar stuff
-
+        in_goes = f"{config_path}/xrays-7-day.json"
         df = pd.read_json(in_goes)
         df["time_tag"] = pd.to_datetime(df["time_tag"], format="%Y-%m-%dT%H:%M:%SZ")
 
@@ -369,26 +370,40 @@ def make_report(grbtime, grb_ra, grb_dec, name):
         ax5.set_xlabel("Seconds from GRB_UTC")
         ax5.set_ylabel("Counts per bin")
 
-    grb_number = name.replace("grb", "")
+    # grb_number = name.replace("grb", "")
     # set a title for the whole figure with the GRB name and time
-    fig.suptitle(f"GRB {grb_number}\n{grbtime.iso} UTC", fontsize=16)
+    fig.suptitle(f"GRB {name}\n{grbtime.iso} UTC", fontsize=16)
     plt.tight_layout()
-    print(f"Saving data/{name}/grb_report_{grb_number}.pdf")
-    plt.savefig(f"./data/{name}/grb_report_{grb_number}.pdf")
+    print(f"Saving report at {dest}/{name}/grb_report_{name}.pdf")
+    plt.savefig(f"{dest}/{name}/grb_report_{name}.pdf")
+
+    #    f2.write(outstr+'\n')
+    print(
+        "Name, SEQID, Start Time, Burst Time, End Time, Offset to Boresight, Separation from Geocenter"
+    )
+    print(outstr)
+    # Add things like: Time of run, etc.
+    print(f"Time of run: {Time.now().iso}")
+    outstr += f", Time of run: {Time.now().iso}"
+
+    # save this to a log file in the name folder inside destination directory
+    logfile = os.path.join(dest, name, f"grb_report_{name}.log")
+    with open(logfile, "a") as f:
+        f.write(outstr + "\n")
 
 
-def grb_visibility(grbtime, coord):
-    load_path = "./"
+def grb_visibility(grbtime, coord, config_path):
+    load_path = config_path
     load = Loader(load_path)
 
     ts = load.timescale()
     t = ts.from_astropy(grbtime)
 
-    planets = load("de436.bsp")
+    planets = load(f"{config_path}/de436.bsp")
     earth = planets["Earth"]
 
     # tlefile = io.download_tle(outdir=load_path)
-    tlefile = "NuSTAR.tle"
+    tlefile = f"{config_path}/NuSTAR.tle"
     mindt, line1, line2 = io.get_epoch_tle(grbtime.datetime, tlefile)
     nustar = EarthSatellite(line1, line2)
     observer = earth + nustar
@@ -406,16 +421,56 @@ def grb_visibility(grbtime, coord):
     return sep
 
 
-# Main here
-#
-# grbtime = Time(os.getenv('GRBTIME'))
-# name = os.getenv('GRBNAME')
-# grb_ra = float(os.getenv('GRB_RA'))
-# grb_dec = float(os.getenv('GRB_DEC'))
-in_goes = "xrays-7-day.json"
-ns = info.NuSTAR()
-grbtime = Time("2025-10-07 19:37:51.50")
-name = "grb251007A"
-grb_ra = 128.173
-grb_dec = 21.823
-make_report(grbtime, grb_ra, grb_dec, name)
+if __name__ == "__main__":
+    parser = ag.ArgumentParser(
+        description="Run the triggered GRB search for NuSTAR SINGS and generate report in the destination directory. \
+            Remember to have xrays-7-day.json, aft.txt, observing_schedule.txt, and NuSTAR.tle in the data/ directory."
+    )
+    parser.add_argument(
+        "name",
+        type=str,
+        help="Name of the GRB (e.g., GRB251007A or NuTSYYYYMMDDTHHMMSS)",
+    )
+    parser.add_argument(
+        "time",
+        type=str,
+        help="Time of the GRB in ISOT format (e.g., 2025-10-07T19:37:51.50)",
+    )
+    parser.add_argument(
+        "--ra", type=float, help="Right Ascension of the GRB (optional, in degrees)"
+    )
+    parser.add_argument(
+        "--dec", type=float, help="Declination of the GRB (optional, in degrees)"
+    )
+    parser.add_argument(
+        "--dest",
+        type=str,
+        default="./data/",
+        help="Destination directory to save the report (default: ./data/)",
+    )
+    parser.add_argument(
+        "--datapath", type=str, default="./data/", help="Path to data directory"
+    )
+    parser.add_argument(
+        "--config_data",
+        type=str,
+        default="./data/",
+        help="Path to directory containing xrays-7-day.json, aft.txt, observing_schedule.txt, and NuSTAR.tle",
+    )
+    args = parser.parse_args()
+
+    config_path = args.config_data
+    ns = info.NuSTAR()
+    # grbtime = Time("2025-10-07 19:37:51.50")
+    name = args.name
+    grbtime = Time(args.time)
+    if args.ra is not None and args.dec is not None:
+        grb_ra = args.ra
+        grb_dec = args.dec
+    else:
+        print("RA and DEC not provided, skipping visibility check.")
+        grb_ra = None
+        grb_dec = None
+    dest = args.dest
+    data_path = args.datapath
+    make_report(grbtime, grb_ra, grb_dec, name, dest, data_path, config_path)
