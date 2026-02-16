@@ -1,0 +1,25 @@
+# make a config yaml file
+
+nustar-data-dir: "/disk/bifrost/nustar/fltops/"
+
+sings-paths:
+  main-dir: "/home/gaurav/sings/"
+  essential-data-path: "/home/gaurav/sings/sings-products/essential-data/"
+  gcn-db-path: "/home/gaurav/sings/sings-products/gcn-notices-sings.db"
+  notice-archive-dir: "/home/gaurav/sings/sings-products/notices/"
+  notices-log: "/home/gaurav/sings/sings-products/notices/notice-log.txt"
+  ts-queue-db: "/home/gaurav/sings/sings-products/ts-queue.db"
+  ts-products-dir: "/home/gaurav/sings/sings-products/ts-products/"
+  
+slack:
+  slack-ts: "sings-ts-reports"
+  slack-ts-status: 0 # 0: off, 1: on
+  slack-ts-notices: "sings-ts-notices"
+  slack-ts-status: 0 # 0: off, 1: on
+  slack-ts-circulars: "sings-ts-circulars"
+  slack-ts-status: 0 # 0: off, 1: on
+  slack-bs: "sings-blind-reports"
+  slack-bs-status: 0 # 0: off, 1: on
+
+ts-config:
+  ts-back-search: 1 # days to look back for TS products

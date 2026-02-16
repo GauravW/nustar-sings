@@ -16,6 +16,7 @@ import json
 from bs4 import BeautifulSoup
 import sqlite3
 from astropy.time import Time
+import yaml
 
 
 def add_notice_to_db(
@@ -324,6 +325,63 @@ def parse_guano(notice, topic, db_name):
     )
     return trigger_ID
 
+def parse_chime(notice, topic, db_name):
+    ''' 
+    Based on https://gcn.nasa.gov/missions/chime
+    '''
+    print("Parsing CHIME/FRB notice...")
+    mission = "CHIME"
+    trigger_ID = notice.get("id")
+    trigger_time = str(Time(notice.get("trigger_time")).isot)
+    ra = notice.get("ra")
+    dec = notice.get("dec")
+    error_radius = max(notice.get("ra_dec_error"))
+    notice_time = str(Time.now().isot)  # No notice time in the JSON, so using current time
+    print(
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}, Notice Time: {notice_time}"
+    )
+    add_notice_to_db(
+        db_name,
+        topic,
+        mission,
+        trigger_ID,
+        trigger_time,
+        ra,
+        dec,
+        error_radius,
+        notice_time=notice_time,
+    )
+    return trigger_ID
+
+
+def parse_dsa110(notice, topic, db_name):
+    '''
+    Based on https://gcn.nasa.gov/missions/dsa110 
+    '''
+    print("Parsing DSA110 notice...")
+    mission = "DSA110"
+    trigger_ID = notice.get("id")
+    trigger_time = str(Time(notice.get("trigger_time")).isot)
+    ra = notice.get("ra")
+    dec = notice.get("dec")
+    error_radius = max(notice.get("ra_dec_error"))
+    notice_time = str(Time.now().isot)  # No notice time in the JSON, so using current time
+    print(
+        f"Mission: {mission}, Trigger ID: {trigger_ID}, Time: {trigger_time}, RA: {ra}, Dec: {dec}, Error Radius: {error_radius}, Notice Time: {notice_time}"
+    )
+    add_notice_to_db(
+        db_name,
+        topic,
+        mission,
+        trigger_ID,
+        trigger_time,
+        ra,
+        dec,
+        error_radius,
+        notice_time=notice_time,
+    )
+    return trigger_ID
+
 
 def parse_circulars(notice, topic, db_name):
     print("Parsing Circulars notice...")
@@ -348,7 +406,7 @@ def find_mission_from_topic(topic, mission_parsers):
     return None
 
 
-def parse_notice(topic, notice_value, mission_parsers, db_name="gcn_notices_sings.db"):
+def parse_notice(topic, notice_value, mission_parsers, db_name):
     """
     Parse the incoming notice based on topic.
     Automatically dispatches to the correct mission parser.
@@ -364,10 +422,10 @@ def parse_notice(topic, notice_value, mission_parsers, db_name="gcn_notices_sing
     if result == "Ignore":
         print("Notice ignored based on parser decision.")
         return "Ignore"
-    return result
+    return result, mission
 
 
-def process_notice(notice_message, mission_parsers, db_name="gcn_notices_sings.db"):
+def process_notice(notice_message, mission_parsers, db_name, notices_dir):
     """
     Process the GCN notice and store it in a SQL database.
     Args:
@@ -376,23 +434,24 @@ def process_notice(notice_message, mission_parsers, db_name="gcn_notices_sings.d
     print("Processing notice...")
     channel_name = notice_message.topic()
     print(f"Storing notice from channel: {channel_name}")
-    folder_base = "data/notices/"
+    folder_base = notices_dir
+    year_now = Time.now().strftime("%Y")
     try:
         if channel_name in vo_topics:
             print("VOEvent notice detected.")
             value_str = notice_message.value().decode("utf-8")
-            ret = parse_notice(
+            ret, mission = parse_notice(
                 channel_name, value_str, mission_parsers, db_name=db_name
             )
             # ret is used for trigger_ID in naming the file
             if ret == "Ignore":
                 print("VOEvent Notice ignored based on parser decision.")
                 return
+            # check if the mission folder exists, if not create it
+            if not os.path.exists(f"{folder_base}/{mission}/{year_now}"):
+                os.makedirs(f"{folder_base}/{mission}/{year_now}")
             with open(
-                os.path.join(
-                    folder_base,
-                    f"{channel_name.replace('.', '_')}_{ret}.xml",
-                ),
+                f"{folder_base}/{mission}/{year_now}/{channel_name.replace('.', '_')}_{ret}.xml",
                 "w",
             ) as f:
                 f.write(value_str)
@@ -404,18 +463,18 @@ def process_notice(notice_message, mission_parsers, db_name="gcn_notices_sings.d
             print("JSON notice detected.")
             value_str = notice_message.value().decode("utf-8")
             alert_json = json.loads(value_str)
-            ret = parse_notice(
+            ret, mission = parse_notice(
                 channel_name, alert_json, mission_parsers, db_name=db_name
             )
             # ret is used for trigger_ID in naming the file
             if ret == "Ignore":
                 print("JSON Notice ignored based on parser decision.")
                 return
+            # check if the mission folder exists, if not create it
+            if not os.path.exists(f"{folder_base}/{mission}/{year_now}"):
+                os.makedirs(f"{folder_base}/{mission}/{year_now}")
             with open(
-                os.path.join(
-                    folder_base,
-                    f"{channel_name.replace('.', '_')}_{ret}.json",
-                ),
+                f"{folder_base}/{mission}/{year_now}/{channel_name.replace('.', '_')}_{ret}.json",
                 "w",
             ) as f:
                 json.dump(alert_json, f, indent=2)
@@ -431,10 +490,15 @@ def process_notice(notice_message, mission_parsers, db_name="gcn_notices_sings.d
 
 
 if __name__ == "__main__":
+    config_file = "nusings_config.yaml"
+    with open(config_file, "r") as f:
+        conf = yaml.safe_load(f)
+    notices_db_path = conf["sings-paths"]["gcn-db-path"]
+    notices_dir_path = conf["sings-paths"]["notice-archive-dir"]
+
     print("Starting GCN Notice Streamer...")
-    # Connect as a consumer
+    
     # Warning: don't share the client secret with others.
-    notices_db_path = "gcn_notices_sings.db"
     client_id = os.getenv("GCN_CLIENT_ID", "fill me in")
     client_secret = os.getenv("GCN_CLIENT_SECRET", "fill me in")
     if client_id == "fill me in" or client_secret == "fill me in":
@@ -455,7 +519,6 @@ if __name__ == "__main__":
         config=config,
     )
 
-    # List all topics
     mission_parsers = {
         "calet": parse_calet,
         "fermi": parse_fermi,
@@ -469,6 +532,8 @@ if __name__ == "__main__":
         "ipn": parse_ipn,
         "igwn": parse_igwn,
         "guano": parse_guano,
+        "chime": parse_chime,
+        "dsa110": parse_dsa110,
     }
     # KEEP THESE TOPICS SEPARATE BASED ON FORMAT
     vo_topics = [
@@ -492,7 +557,10 @@ if __name__ == "__main__":
         "igwn.gwalert",
         "gcn.notices.swift.bat.guano",
         "gcn.notices.einstein_probe.wxt.alert",
+        "gcn.notices.chime.frb.alert",
+        "gcn.notices.dsa110.frb"
     ]
+
     topics = vo_topics + json_topics
     consumer.subscribe(topics)
     print("Listening to the following topics:")
@@ -505,7 +573,5 @@ if __name__ == "__main__":
             if message.error():
                 print(message.error())
                 continue
-            # Print the topic and message ID
             print(f"topic={message.topic()}, offset={message.offset()}")
-            # Here you can add code to parse the message and store it in a SQL database
-            process_notice(message, mission_parsers, notices_db_path)
+            process_notice(message, mission_parsers, notices_db_path, notices_dir_path)
