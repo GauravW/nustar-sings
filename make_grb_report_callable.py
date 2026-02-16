@@ -21,9 +21,6 @@ from skyfield.api import EarthSatellite, Loader
 
 import nustar_pysolar.io as io
 
-# font = {"size": 8}
-# matplotlib.rc("font", **font)
-
 
 def make_report(
     grbtime,
@@ -125,8 +122,6 @@ def make_report(
     hka_time = ns.met_to_time(hka["TIME"])
     hkb_time = ns.met_to_time(hkb["TIME"])
 
-    outstr = f"{name},{seqid},{t0.iso},{grbtime.iso},{t1.iso},{boresight_offset:8.2f},{sep:8.2f}"
-
     # ax.set_ylim([1e-9, 1e-2])
     # y1, y2 = ax.get_ylim()
 
@@ -221,18 +216,28 @@ def make_report(
         in_goes = f"{config_path}/xrays-7-day.json"
         df = pd.read_json(in_goes)
         df["time_tag"] = pd.to_datetime(df["time_tag"], format="%Y-%m-%dT%H:%M:%SZ")
-
-        tstart = ns.met_to_time(lowlim)
-        tend = ns.met_to_time(highlim)
+        lowlim_solar = lowlim - 3600
+        highlim_solar = highlim + 3600
+        tstart_grb = ns.met_to_time(lowlim)
+        tend_grb = ns.met_to_time(highlim)
+        tstart_solar = ns.met_to_time(lowlim_solar)
+        tend_solar = ns.met_to_time(highlim_solar)
 
         df2 = df[
             (df["energy"] == "0.1-0.8nm")
-            & (df["time_tag"] > tstart.datetime)
-            & (df["time_tag"] < tend.datetime)
+            & (df["time_tag"] > tstart_solar.datetime)
+            & (df["time_tag"] < tend_solar.datetime)
         ]
 
         ax2.step(df2["time_tag"], df2["flux"], label="GOES-17 XRS 1-min ave")
-        ax2.set_xlim(tstart.datetime, tend.datetime)
+        # set the xaxis limits to be one hour before tstart and one hour after tend
+        ax2.set_xlim(tstart_solar.datetime, tend_solar.datetime)
+        # draw a vertical line at grb tstart and tend
+        ax2.plot([tstart_grb.datetime, tstart_grb.datetime], [1e-7, 1e-3], linestyle="dotted", color="#7fbf7b")
+        ax2.plot([tend_grb.datetime, tend_grb.datetime], [1e-7, 1e-3], linestyle="dotted", color="#7fbf7b")
+        # rotate x-axis labels
+        plt.setp(ax2.get_xticklabels(), rotation=20, ha="right")
+
         ax2.set_ylim([1e-7, 1e-3])
         y1, y2 = ax2.get_ylim()
         ax2.set_yscale("log")
@@ -377,19 +382,20 @@ def make_report(
     print(f"Saving report at {dest}/{name}/grb_report_{name}.pdf")
     plt.savefig(f"{dest}/{name}/grb_report_{name}.pdf")
 
-    #    f2.write(outstr+'\n')
-    print(
-        "Name, SEQID, Start Time, Burst Time, End Time, Offset to Boresight, Separation from Geocenter"
-    )
-    print(outstr)
-    # Add things like: Time of run, etc.
-    print(f"Time of run: {Time.now().iso}")
-    outstr += f", Time of run: {Time.now().iso}"
+    header = "Name, OBSID/SEQID, Start Time, Burst Time, End Time, RA, Dec, Offset to Boresight (deg), Separation from Geocenter (deg), Time of run (UTC)"
+    values = f"{name},{socname}/{seqid},{t0.iso},{grbtime.iso},{t1.iso},{grb_ra},{grb_dec},{boresight_offset:8.2f},{sep.value:8.2f}, {Time.now().iso}"
+    keys = [k.strip() for k in header.split(",")]
+    vals = [v.strip() for v in values.split(",")]
+
+    out = "\n".join(f"{k}: {v}" for k, v in zip(keys, vals))
+    print(out)
+
+    # make a table string instead of two lines - i want two columns (take transpose)
 
     # save this to a log file in the name folder inside destination directory
     logfile = os.path.join(dest, name, f"grb_report_{name}.log")
     with open(logfile, "a") as f:
-        f.write(outstr + "\n")
+        f.write(out + "\n\n")
 
 
 def grb_visibility(grbtime, coord, config_path):
@@ -398,8 +404,7 @@ def grb_visibility(grbtime, coord, config_path):
 
     ts = load.timescale()
     t = ts.from_astropy(grbtime)
-
-    planets = load(f"{config_path}/de436.bsp")
+    planets = load("de436.bsp")
     earth = planets["Earth"]
 
     # tlefile = io.download_tle(outdir=load_path)
@@ -429,7 +434,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "name",
         type=str,
-        help="Name of the GRB (e.g., GRB251007A or NuTSYYYYMMDDTHHMMSS)",
+        help="Name of the GRB (e.g., GRB251007A or NUTSYYYYMMDDTHHMMSS)",
     )
     parser.add_argument(
         "time",

@@ -1,0 +1,214 @@
+"""
+Queue script for the NuSTAR SINGS - triggered searches.
+Author: Gaurav Waratkar
+
+Note:
+- Script assumes that all GCN notices are stored in a local db.
+- Script maintains the queue at nuts_queue.db file - columns: NuID, trigger_time, ra, dec, missions_list, queue_status
+- Script will combine multiple notices for the trigger times within 100s.
+    - We use the earliest trigger time as the main trigger time.
+    - We store the list of all missions that reported these notices in the new queue entry.
+    - Queue status is set to "pending" for new entries.
+- Script will check the queue for pending entries.
+    - The trigger is either a new entry added to the queue. Or the availability of new NuSTAR data. (need to watch this folder)
+- For each pending entry, it will check if NuSTAR data is available.
+- If data is available, it will set the queue status to "processing" and trigger the triggered search pipeline.
+- After the search is complete, change queue status to "completed", "data gap", or "failed" (if there was an error).
+    - This check is done by checking if 3 pdf files and a log file are present in the output directory.
+- Everything is controlled via a config file: nusings_config.yaml
+    - config file contains db paths, data directories (Nustar data & our output path), whether to send slack notifications or not,
+    - how long back to check for new notices, etc
+- Logs everything with package logging
+"""
+
+import sqlite3
+import astropy.time as Time
+import astropy.units as u
+from config import load_config
+import subprocess as subp
+
+
+def create_nuid_from_isot(trigger_time_isot):
+    """
+    Create a NuID from the trigger time in ISOT format.
+    Args:
+        trigger_time_isot (str): Trigger time in ISOT format.
+    Returns:
+        str: NuID in the format 'NUTSYYYYMMDDTHHMMSS'
+    """
+    t = Time.Time(trigger_time_isot, format="isot", scale="utc")
+    nuid = f"NUTS{t.strftime('%Y%m%dT%H%M%S')}"
+    return nuid
+
+
+def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
+    """
+    Merge new GCN notices from gcn_db_path to the triggered search queue db at ts_queue_db_path.
+    Args:
+        gcn_db_path (str): Path to the GCN notices database.
+        ts_queue_db_path (str): Path to the triggered search queue database.
+        ts_back_search (int): Number of days back to search for new notices.
+    """
+    gcn_conn = sqlite3.connect(gcn_db_path)
+    gcn_cursor = gcn_conn.cursor()
+
+    ts_conn = sqlite3.connect(ts_queue_db_path)
+    ts_cursor = ts_conn.cursor()
+
+    ts_cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ts_queue (
+            NuID TEXT PRIMARY KEY,
+            trigger_time TEXT,
+            ra REAL,
+            dec REAL,
+            missions_list TEXT,
+            queue_status TEXT
+        )
+    """)
+    ts_conn.commit()
+
+    current_time = Time.now()
+    time_threshold = current_time - (ts_back_search * u.day)
+
+    gcn_cursor.execute(
+        """
+        SELECT * FROM notices
+        WHERE trigger_time >= ?
+        ORDER BY trigger_time ASC
+    """,
+        (time_threshold.iso,),
+    )
+    new_notices = gcn_cursor.fetchall()
+
+    for notice in new_notices:
+        _, _, mission, _, trigger_time, ra, dec, _, _ = notice
+        # check if a notice with similar trigger time exists in the queue (within 100s)
+        ts_cursor.execute(
+            """
+            SELECT * FROM ts_queue
+            WHERE ABS(strftime('%s', trigger_time) - strftime('%s', ?)) <= 100
+        """,
+            (trigger_time,),
+        )
+        existing_entry = ts_cursor.fetchall()
+
+        # if exists, update missions_list. If this new mission is swift then use the new ra, dec
+        # if the ra, dec is updated, then the queue status is reset to pending
+        if existing_entry:
+            NuID, _, _, _, existing_missions_list, _ = existing_entry[0]
+            existing_missions = existing_missions_list.split(",")
+            if mission not in existing_missions:
+                existing_missions.append(mission)
+                updated_missions_list = ",".join(existing_missions)
+                if mission == "swift" or mission == "einstein_probe":
+                    ts_cursor.execute(
+                        """
+                        UPDATE ts_queue
+                        SET missions_list = ?, ra = ?, dec = ?, queue_status = ?
+                        WHERE NuID = ?
+                    """,
+                        (updated_missions_list, ra, dec, "pending", NuID),
+                    )
+                else:
+                    ts_cursor.execute(
+                        """
+                        UPDATE ts_queue
+                        SET missions_list = ?
+                        WHERE NuID = ?
+                    """,
+                        (updated_missions_list, NuID),
+                    )
+            if mission in existing_missions and mission == "Fermi":
+                # update the ra, dec only if the mission list doesn't already contain swift or einstein probe.
+                # this is to cater for the updated notices that fermi sends out
+                if (
+                    "swift" not in existing_missions
+                    and "einstein_probe" not in existing_missions
+                ):
+                    ts_cursor.execute(
+                        """
+                        UPDATE ts_queue
+                        SET ra = ?, dec = ?, queue_status = ?
+                        WHERE NuID = ?
+                    """,
+                        (ra, dec, "pending", NuID),
+                    )
+
+        # if not exists, create a new entry in the queue with status "pending"
+        else:
+            NuID = create_nuid_from_isot(trigger_time)
+            ts_cursor.execute(
+                """
+                INSERT INTO ts_queue (NuID, trigger_time, ra, dec, missions_list, queue_status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """,
+                (NuID, trigger_time, ra, dec, mission, "pending"),
+            )
+
+    ts_conn.commit()
+    gcn_conn.close()
+    ts_conn.close()
+
+
+def process_pending_queue_entries(gcn_db_path, ts_queue_db_path, ts_back_search):
+    """
+    Process pending entries in the triggered search queue.
+    Args:
+        gcn_db_path (str): Path to the GCN notices database.
+        ts_queue_db_path (str): Path to the triggered search queue database.
+        ts_back_search (int): Number of days back to search for new notices.
+    """
+    # This function will check for pending entries in the queue, check if NuSTAR data is available, and trigger the search pipeline if data is available.
+    # The implementation of this function will depend on how we check for NuSTAR data availability and how we trigger the search pipeline. For now, we will just print the pending entries.
+
+    ts_conn = sqlite3.connect(ts_queue_db_path)
+    ts_cursor = ts_conn.cursor()
+
+    current_time = Time.now()
+    time_threshold = current_time - (ts_back_search * u.day)
+
+    ts_cursor.execute(
+        """
+        SELECT * FROM ts_queue
+        WHERE queue_status = 'pending' AND trigger_time >= ?
+        ORDER BY trigger_time ASC
+    """,
+        (time_threshold.iso,),
+    )
+    pending_entries = ts_cursor.fetchall()
+
+    for entry in pending_entries:
+        print(f"Pending entry: {entry}")
+        NuID, trigger_time, ra, dec, missions_list, queue_status = entry
+        if ra is None or dec is None:
+            print(f"RA or Dec is None for entry {NuID}.")
+            command = f"python make_grb_report_callable.py {NuID} --trigger_time {trigger_time}"
+        else:
+            command = f"python make_grb_report_callable.py {NuID} --ra {ra} --dec {dec} --trigger_time {trigger_time}"
+        subp.run(command, shell=True)
+        queue_status = "processed"
+        ts_cursor.execute(
+            """
+            UPDATE ts_queue
+            SET queue_status = ?
+            WHERE NuID = ?
+        """,
+            (queue_status, NuID),
+        )
+        ts_conn.commit()
+
+    ts_conn.close()
+
+
+if __name__ == "__main__":
+    config = load_config("nusings_config.yaml")
+    essential_data_path = config["sings-paths"]["essential-data-path"]
+    nu_data_path = config["nustar-data-dir"]
+    gcn_db_path = config["sings-paths"]["gcn-db-path"]
+    ts_queue_db_path = config["sings-paths"]["ts-queue-db"]
+    ts_products_dir = config["sings-paths"]["ts-products-dir"]
+    ts_back_search = config["ts-config"]["ts-back-search"]  # days
+
+    merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search)
+
+    process_pending_queue_entries(gcn_db_path, ts_queue_db_path, ts_back_search)
