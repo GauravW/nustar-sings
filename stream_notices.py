@@ -510,6 +510,9 @@ if __name__ == "__main__":
     slack = [notices_slack_channel_name, notices_slack_channel_id, notices_slack_status]
 
     print("Starting GCN Notice Streamer...")
+    # send the start-up message to slack
+    if notices_slack_status:
+        send_slack_message("GCN Notice Streamer has started.", channel_id=notices_slack_channel_id)
     
     # Warning: don't share the client secret with others.
     client_id = os.getenv("GCN_CLIENT_ID", "fill me in")
@@ -580,11 +583,18 @@ if __name__ == "__main__":
     for topic in topics:
         print(f" - {topic}")
     print("Press Ctrl+C to exit.\n")
-
-    while True:
-        for message in consumer.consume(timeout=1):
-            if message.error():
-                print(message.error())
-                continue
-            print(f"topic={message.topic()}, offset={message.offset()}")
-            process_notice(message, mission_parsers, notices_db_path, notices_dir_path, slack)
+    try:
+        while True:
+            for message in consumer.consume(timeout=1):
+                if message.error():
+                    print(message.error())
+                    continue
+                print(f"topic={message.topic()}, offset={message.offset()}")
+                process_notice(message, mission_parsers, notices_db_path, notices_dir_path, slack)
+    except KeyboardInterrupt:
+        print("Exiting...")
+        # send the shutdown message to slack
+        if notices_slack_status:
+            send_slack_message("GCN Notice Streamer has stopped.", channel_id=notices_slack_channel_id)
+    finally:
+        consumer.close()
