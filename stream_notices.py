@@ -90,7 +90,7 @@ def parse_calet(notice, topic, db_name):
         error_radius,
         notice_time,
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 
 def parse_fermi(notice, topic, db_name):
@@ -119,7 +119,7 @@ def parse_fermi(notice, topic, db_name):
         error_radius,
         notice_time,
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 
 def parse_icecube(notice, topic, db_name):
@@ -148,7 +148,7 @@ def parse_icecube(notice, topic, db_name):
         error_radius,
         notice_time,
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 
 # def parse_lvc(notice, topic, db_name):
@@ -181,7 +181,7 @@ def parse_swift(notice, topic, db_name):
         error_radius,
         notice_time,
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 
 def parse_svom_grm(notice, topic, db_name):
@@ -200,7 +200,7 @@ def parse_svom_grm(notice, topic, db_name):
     add_notice_to_db(
         db_name, topic, mission, trigger_ID, trigger_time, notice_time=notice_time
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 
 def parse_svom_eclairs(notice, topic, db_name):
@@ -230,7 +230,7 @@ def parse_svom_eclairs(notice, topic, db_name):
         error_radius,
         notice_time=notice_time,
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 
 def parse_ipn(notice, topic, db_name):
@@ -257,7 +257,7 @@ def parse_ipn(notice, topic, db_name):
     add_notice_to_db(
         db_name, topic, mission, trigger_id, trigger_time, notice_time=notice_time
     )
-    return trigger_id
+    return trigger_id, trigger_time
 
 
 def parse_einstein_probe(notice, topic, db_name):
@@ -285,7 +285,7 @@ def parse_einstein_probe(notice, topic, db_name):
         error_radius,
         notice_time=notice_time,
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 
 def parse_igwn(notice, topic, db_name):
@@ -325,7 +325,7 @@ def parse_guano(notice, topic, db_name):
     add_notice_to_db(
         db_name, topic, mission, trigger_ID, trigger_time, notice_time=notice_time
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 def parse_chime(notice, topic, db_name):
     ''' 
@@ -353,7 +353,7 @@ def parse_chime(notice, topic, db_name):
         error_radius,
         notice_time=notice_time,
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 
 def parse_dsa110(notice, topic, db_name):
@@ -382,7 +382,7 @@ def parse_dsa110(notice, topic, db_name):
         error_radius,
         notice_time=notice_time,
     )
-    return trigger_ID
+    return trigger_ID, trigger_time
 
 
 def parse_circulars(notice, topic, db_name):
@@ -394,7 +394,7 @@ def parse_circulars(notice, topic, db_name):
     print(f"Mission: {mission}, Circular ID: {circ_id}, Subject: {subject}")
     # Not adding the circulars to the DB for now.
     # Send slack message only instead later.
-    return circ_id
+    return circ_id, Time.now().isot
 
 
 def find_mission_from_topic(topic, mission_parsers):
@@ -420,11 +420,11 @@ def parse_notice(topic, notice_value, mission_parsers, db_name):
     parser = mission_parsers[mission]
     print(f"Dispatching to parser for mission: {mission}")
     print("Using parser:", parser.__name__)
-    result = parser(notice_value, topic, db_name)
+    result, time = parser(notice_value, topic, db_name)
     if result == "Ignore":
         print("Notice ignored based on parser decision.")
         return "Ignore"
-    return result, mission
+    return result, mission, time
 
 
 def process_notice(notice_message, mission_parsers, db_name, notices_dir, slack):
@@ -442,7 +442,7 @@ def process_notice(notice_message, mission_parsers, db_name, notices_dir, slack)
         if channel_name in vo_topics:
             print("VOEvent notice detected.")
             value_str = notice_message.value().decode("utf-8")
-            ret, mission = parse_notice(
+            ret, mission, time = parse_notice(
                 channel_name, value_str, mission_parsers, db_name=db_name
             )
             # ret is used for trigger_ID in naming the file
@@ -459,18 +459,17 @@ def process_notice(notice_message, mission_parsers, db_name, notices_dir, slack)
             ) as f:
                 f.write(value_str)
                 print(f"VOEvent Notice stored at: {f.name}")
-                ret = "Done"
             if slack[2]:  # Check if slack notifications are enabled
-                message = f"New GCN Notice: {mission}, ID: {ret}, Channel: {channel_name}"
+                message = f"New GCN Notice: {mission}, ID: {ret}, Trigger Time: {time}, Channel: {channel_name}"
                 send_slack_message(message, channel_id=slack[1])
             if ret == "Done":
                 print("VOEvent Notice parsed successfully.")
-
+        
         elif channel_name in json_topics:
             print("JSON notice detected.")
             value_str = notice_message.value().decode("utf-8")
             alert_json = json.loads(value_str)
-            ret, mission = parse_notice(
+            ret, mission, time = parse_notice(
                 channel_name, alert_json, mission_parsers, db_name=db_name
             )
             # ret is used for trigger_ID in naming the file
@@ -486,9 +485,8 @@ def process_notice(notice_message, mission_parsers, db_name, notices_dir, slack)
             ) as f:
                 json.dump(alert_json, f, indent=2)
                 print(f"JSON Notice stored at: {f.name}")
-                ret = "Done"
             if slack[2]:  # Check if slack notifications are enabled
-                message = f"New GCN Notice: {mission}, ID: {ret}, Channel: {channel_name}"
+                message = f"New GCN Notice: {mission}, ID: {ret}, Trigger Time: {time}, Channel: {channel_name}"
                 send_slack_message(message, channel_id=slack[1])
             if ret == "Done":
                 print("JSON Notice parsed successfully.")
