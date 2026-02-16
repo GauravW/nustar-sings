@@ -12,13 +12,17 @@ sings-paths:
   ts-products-dir: "/home/gaurav/sings/sings-products/ts-products/"
   
 slack:
-  slack-ts: "sings-ts-reports"
-  slack-ts-status: 0 # 0: off, 1: on
+  slack-ts-reports: "sings-ts-reports"
+  slack-ts-reports-id: "C0AFBGF5XRQ"
+  slack-ts-reports-status: 0 # 0: off, 1: on
   slack-ts-notices: "sings-ts-notices"
-  slack-ts-status: 0 # 0: off, 1: on
-  slack-ts-circulars: "sings-ts-circulars"
-  slack-ts-status: 0 # 0: off, 1: on
-  slack-bs: "sings-blind-reports"
+  slack-ts-notices-id: "C0AEW3T775M"
+  slack-ts-notices-status: 1 # 0: off, 1: on
+  # slack-ts-circulars: "sings-ts-circulars" # put circulars in the same channel as notices for now
+  # slack-ts-circulars-id: "C0AEW3T776M"
+  # slack-ts-circulars-status: 0 # 0: off, 1: on
+  slack-bs-reports: "sings-blind-reports"
+  # slack-bs-reports-id: ""
   slack-bs-status: 0 # 0: off, 1: on
 
 ts-config:

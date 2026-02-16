@@ -17,6 +17,8 @@ from bs4 import BeautifulSoup
 import sqlite3
 from astropy.time import Time
 import yaml
+from nusings_config import load_config
+from message_slack import send_slack_message
 
 
 def add_notice_to_db(
@@ -425,7 +427,7 @@ def parse_notice(topic, notice_value, mission_parsers, db_name):
     return result, mission
 
 
-def process_notice(notice_message, mission_parsers, db_name, notices_dir):
+def process_notice(notice_message, mission_parsers, db_name, notices_dir, slack):
     """
     Process the GCN notice and store it in a SQL database.
     Args:
@@ -444,6 +446,7 @@ def process_notice(notice_message, mission_parsers, db_name, notices_dir):
                 channel_name, value_str, mission_parsers, db_name=db_name
             )
             # ret is used for trigger_ID in naming the file
+            # send a slack message 
             if ret == "Ignore":
                 print("VOEvent Notice ignored based on parser decision.")
                 return
@@ -455,7 +458,11 @@ def process_notice(notice_message, mission_parsers, db_name, notices_dir):
                 "w",
             ) as f:
                 f.write(value_str)
-            print(f"VOEvent Notice stored at: {f.name}")
+                print(f"VOEvent Notice stored at: {f.name}")
+                ret = "Done"
+            if slack[2]:  # Check if slack notifications are enabled
+                message = f"New GCN Notice: {mission}, ID: {ret}, Channel: {channel_name}"
+                send_slack_message(message, channel_id=slack[1])
             if ret == "Done":
                 print("VOEvent Notice parsed successfully.")
 
@@ -478,7 +485,11 @@ def process_notice(notice_message, mission_parsers, db_name, notices_dir):
                 "w",
             ) as f:
                 json.dump(alert_json, f, indent=2)
-            print(f"JSON Notice stored at: {f.name}")
+                print(f"JSON Notice stored at: {f.name}")
+                ret = "Done"
+            if slack[2]:  # Check if slack notifications are enabled
+                message = f"New GCN Notice: {mission}, ID: {ret}, Channel: {channel_name}"
+                send_slack_message(message, channel_id=slack[1])
             if ret == "Done":
                 print("JSON Notice parsed successfully.")
 
@@ -490,11 +501,13 @@ def process_notice(notice_message, mission_parsers, db_name, notices_dir):
 
 
 if __name__ == "__main__":
-    config_file = "nusings_config.yaml"
-    with open(config_file, "r") as f:
-        conf = yaml.safe_load(f)
+    conf = load_config("nusings_config.yaml")
     notices_db_path = conf["sings-paths"]["gcn-db-path"]
     notices_dir_path = conf["sings-paths"]["notice-archive-dir"]
+    notices_slack_channel_name = conf["slack"]["slack-ts-notices"]
+    notices_slack_channel_id = conf["slack"]["slack-ts-notices-id"]
+    notices_slack_status = conf["slack"]["slack-ts-notices-status"]
+    slack = [notices_slack_channel_name, notices_slack_channel_id, notices_slack_status]
 
     print("Starting GCN Notice Streamer...")
     
@@ -554,7 +567,7 @@ if __name__ == "__main__":
     json_topics = [
         # "gcn.heartbeat",
         "gcn.circulars",
-        "igwn.gwalert",
+        # "igwn.gwalert",
         "gcn.notices.swift.bat.guano",
         "gcn.notices.einstein_probe.wxt.alert",
         "gcn.notices.chime.frb.alert",
@@ -574,4 +587,4 @@ if __name__ == "__main__":
                 print(message.error())
                 continue
             print(f"topic={message.topic()}, offset={message.offset()}")
-            process_notice(message, mission_parsers, notices_db_path, notices_dir_path)
+            process_notice(message, mission_parsers, notices_db_path, notices_dir_path, slack)
