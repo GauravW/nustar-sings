@@ -21,11 +21,15 @@ Note:
 - Logs everything with package logging
 """
 
+import os
+from datetime import time
 import sqlite3
 import astropy.time as Time
 import astropy.units as u
 from config import load_config
 import subprocess as subp
+import glob
+from message_slack import send_slack_message
 
 
 def create_nuid_from_isot(trigger_time_isot):
@@ -150,11 +154,24 @@ def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
     ts_conn.close()
 
 
-def process_pending_queue_entries(gcn_db_path, ts_queue_db_path, ts_back_search):
+def send_ts_products_on_slack(output_dir, NuID):
+    """
+    Send the triggered search products on slack.
+    Args:
+        output_dir (str): Directory where the triggered search products are stored.
+        NuID (str): NuID of the triggered search.
+    """
+    # This function will send the triggered search products on slack. The implementation of this function will depend on how we want to format the message and which slack channel we want to send it to. For now, we will just print the files that we would send.
+
+    files_to_send = glob.glob(f"{output_dir}/*pdf")
+    print(f"Files to send for {NuID}: {files_to_send}")
+
+
+def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
     """
     Process pending entries in the triggered search queue.
     Args:
-        gcn_db_path (str): Path to the GCN notices database.
+        config (dict): Configuration dictionary.
         ts_queue_db_path (str): Path to the triggered search queue database.
         ts_back_search (int): Number of days back to search for new notices.
     """
@@ -180,13 +197,46 @@ def process_pending_queue_entries(gcn_db_path, ts_queue_db_path, ts_back_search)
     for entry in pending_entries:
         print(f"Pending entry: {entry}")
         NuID, trigger_time, ra, dec, missions_list, queue_status = entry
+        essential_data_path = config["sings-paths"]["essential-data-path"]
+        dest_dir = config["sings-paths"]["ts-products-dir"]
+        trigger_year = Time(trigger_time).strftime("%Y")
+        # check if the folder exists.
+        year_dir = os.path.join(dest_dir, trigger_year)
+        if not os.path.exists(year_dir):
+            os.makedirs(year_dir)
         if ra is None or dec is None:
             print(f"RA or Dec is None for entry {NuID}.")
-            command = f"python make_grb_report_callable.py {NuID} --trigger_time {trigger_time}"
+            command = f"python make_grb_report_callable.py {NuID} --trigger_time {trigger_time}\
+                  --config_path {essential_data_path} --dest {year_dir}"
         else:
-            command = f"python make_grb_report_callable.py {NuID} --ra {ra} --dec {dec} --trigger_time {trigger_time}"
+            command = f"python make_grb_report_callable.py {NuID} --ra {ra} --dec {dec}\
+                  --trigger_time {trigger_time} --config_path {essential_data_path} --dest {year_dir}"
         subp.run(command, shell=True)
-        queue_status = "processed"
+
+        log_file = f"{year_dir}/{NuID}/{NuID}_queue_log.txt"
+        with open(log_file, "w") as f:
+            f.write(f"NuID: {NuID}\n")
+            f.write(f"Trigger time: {trigger_time}\n")
+            f.write(f"RA: {ra}\n")
+            f.write(f"Dec: {dec}\n")
+            f.write(f"Missions list: {missions_list}\n")
+            f.write(f"Queue status: {queue_status}\n")
+            f.write(f"Command run: {command}\n")
+            f.write(f"Run time: {Time.now().iso}\n")
+            f.write("\n\n")
+        # check the number of files in the output directory for this NuID. If there are 4 or more files, we assume the search is complete and successful. This is a placeholder check and should be replaced with a more robust check based on the actual output of the search pipeline.
+        output_dir = f"{year_dir}/{NuID}"
+        if os.path.exists(output_dir):
+            num_files = len(os.listdir(output_dir))
+            print(f"Number of files in output directory for entry {NuID}: {num_files}")
+            if num_files >= 4:
+                queue_status = "processed"
+                print(f"Search complete for entry {NuID}.")
+                print("Sending the files on slack...")
+                send_ts_products_on_slack(output_dir, NuID)
+            else:
+                queue_status = "pending"
+                print(f"Search not complete for entry {NuID}. Still pending.")
         ts_cursor.execute(
             """
             UPDATE ts_queue
@@ -209,6 +259,9 @@ if __name__ == "__main__":
     ts_products_dir = config["sings-paths"]["ts-products-dir"]
     ts_back_search = config["ts-config"]["ts-back-search"]  # days
 
-    merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search)
-
-    process_pending_queue_entries(gcn_db_path, ts_queue_db_path, ts_back_search)
+    # TODO: change this in the future to something like watchdog
+    interval = config["ts-config"]["interval"]  # seconds
+    while True:
+        merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search)
+        process_pending_queue_entries(config, ts_queue_db_path, ts_back_search)
+        time.sleep(interval)
