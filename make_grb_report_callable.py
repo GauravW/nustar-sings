@@ -20,6 +20,8 @@ from astropy import units as u
 from skyfield.api import EarthSatellite, Loader
 
 import nustar_pysolar.io as io
+from nusings_config import load_config
+import get_nu_obs
 
 
 def make_report(
@@ -90,12 +92,12 @@ def make_report(
     seqid = fields[2]
     socname = seqid[0:8] + "_" + fields[3]
 
-    datpath = f"{data_path}/{socname}"
+    # datpath = f"{data_path}/{socname}"
     # datpath = os.path.join(datadir, socname)
-    seqpath = os.path.join(datpath, seqid)
+    # seqpath = os.path.join(data_path, seqid)
     # print(seqpath)
-    hkdir = os.path.join(seqpath, "hk")
-    evdir = os.path.join(seqpath, "event_cl")
+    hkdir = os.path.join(data_path, "hk")
+    evdir = os.path.join(data_path, "event_cl")
 
     hka_file = os.path.join(hkdir, f"nu{seqid}A_fpm.hk")
     hkb_file = os.path.join(hkdir, f"nu{seqid}B_fpm.hk")
@@ -233,8 +235,18 @@ def make_report(
         # set the xaxis limits to be one hour before tstart and one hour after tend
         ax2.set_xlim(tstart_solar.datetime, tend_solar.datetime)
         # draw a vertical line at grb tstart and tend
-        ax2.plot([tstart_grb.datetime, tstart_grb.datetime], [1e-7, 1e-3], linestyle="dotted", color="#7fbf7b")
-        ax2.plot([tend_grb.datetime, tend_grb.datetime], [1e-7, 1e-3], linestyle="dotted", color="#7fbf7b")
+        ax2.plot(
+            [tstart_grb.datetime, tstart_grb.datetime],
+            [1e-7, 1e-3],
+            linestyle="dotted",
+            color="#7fbf7b",
+        )
+        ax2.plot(
+            [tend_grb.datetime, tend_grb.datetime],
+            [1e-7, 1e-3],
+            linestyle="dotted",
+            color="#7fbf7b",
+        )
         # rotate x-axis labels
         plt.setp(ax2.get_xticklabels(), rotation=20, ha="right")
 
@@ -382,6 +394,46 @@ def make_report(
     print(f"Saving report at {dest}/{name}/grb_report_{name}.pdf")
     plt.savefig(f"{dest}/{name}/grb_report_{name}.pdf")
 
+    # CsI lightcurve
+    ax = plt.figure(figsize=(8, 6)).subplots()
+    ax.axvline(0, color="green", linestyle="--", alpha=0.5, label="GRB Time")
+    ax.step(hka_rel, hka["SHLDLO"], label="Shield A", where="post")
+    ax.step(hkb_rel, hkb["SHLDLO"], label="Shield B", where="post")
+    ax.set_ylabel("Shield Count / sec", fontsize=12)
+    ax.set_xlabel(f"Seconds since {grbtime.iso} UTC")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(f"{dest}/{name}/{name}_CsI_lc.pdf", dpi=300)
+
+    # CZT lightcurve (use the following snippet)
+    met0 = grb_met - 300
+    met1 = grb_met + 300
+    ax = plt.figure(figsize=(8, 6)).subplots()
+    ev2B = evb[(evb["TIME"] <= met1) & (evb["TIME"] > met0) & (evb["PI"] > 2460)]
+    ev2A = eva[(eva["TIME"] <= met1) & (eva["TIME"] > met0) & (eva["PI"] > 2460)]
+    print(f"Events: A={len(ev2A)}, B={len(ev2B)}")
+    fig, ax = plt.subplots(figsize=(8, 6))
+    bins = 350
+    hista, edgesa = histogram(ev2A["TIME"], bins=bins, range=(met0, met1))
+    histb, edgesb = histogram(ev2B["TIME"], bins=bins, range=(met0, met1))
+    widths = edgesa[1:] - edgesa[:-1]
+    centers = (edgesa[:-1] + edgesa[1:]) / 2
+    ct = ns.met_to_time(centers)
+    ct_rel = (ct - grb_utc).to_value("sec")
+
+    ax.step(
+        ct_rel, hista / widths, where="post", color="#fc8d59", alpha=0.4, label="FPMA"
+    )
+    ax.step(
+        ct_rel, histb / widths, where="post", color="#4575b4", alpha=0.4, label="FPMB"
+    )
+    ax.axvline(0, color="green", linestyle="--", alpha=0.5, label="GRB Time")
+    ax.set_ylabel("CZT > 100 keV Counts / sec", fontsize=12)
+    ax.set_xlabel(f"Seconds since {grbtime.iso} UTC")
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(f"{dest}/{name}/{name}_CZT_lc.pdf", dpi=300)
+
     header = "Name, OBSID/SEQID, Start Time, Burst Time, End Time, RA, Dec, Offset to Boresight (deg), Separation from Geocenter (deg), Time of run (UTC)"
     values = f"{name},{socname}/{seqid},{t0.iso},{grbtime.iso},{t1.iso},{grb_ra},{grb_dec},{boresight_offset:8.2f},{sep.value:8.2f}, {Time.now().iso}"
     keys = [k.strip() for k in header.split(",")]
@@ -389,8 +441,6 @@ def make_report(
 
     out = "\n".join(f"{k}: {v}" for k, v in zip(keys, vals))
     print(out)
-
-    # make a table string instead of two lines - i want two columns (take transpose)
 
     # save this to a log file in the name folder inside destination directory
     logfile = os.path.join(dest, name, f"grb_report_{name}.log")
@@ -404,7 +454,9 @@ def grb_visibility(grbtime, coord, config_path):
 
     ts = load.timescale()
     t = ts.from_astropy(grbtime)
-    planets = load("de436.bsp")
+    planets = load(
+        "de436.bsp"
+    )  # this just downloads the planetary ephemeris in the config path if not already there
     earth = planets["Earth"]
 
     # tlefile = io.download_tle(outdir=load_path)
@@ -418,7 +470,6 @@ def grb_visibility(grbtime, coord, config_path):
 
     ra_deg = this_ra.to(u.deg)
     dec_deg = this_dec.to(u.deg)
-    # print()
 
     geocen = SkyCoord(ra_deg, dec_deg, unit=(u.deg, u.deg))
     sep = geocen.separation(coord)
@@ -454,7 +505,9 @@ if __name__ == "__main__":
         help="Destination directory to save the report (default: ./data/)",
     )
     parser.add_argument(
-        "--datapath", type=str, default="./data/", help="Path to data directory"
+        "--datapath",
+        type=str,
+        help="Path to data directory. If not provided, it will be determined from the observing schedule. Eg.: /disk/bifrost/nustar/fltops/81202301_GS_1354m64/81202301002",
     )
     parser.add_argument(
         "--config_data",
@@ -466,8 +519,9 @@ if __name__ == "__main__":
 
     config_path = args.config_data
     ns = info.NuSTAR()
+    config_file = load_config("nusings_config.yaml")
     # grbtime = Time("2025-10-07 19:37:51.50")
-    name = args.name
+    name = args.name  # NuID
     grbtime = Time(args.time)
     if args.ra is not None and args.dec is not None:
         grb_ra = args.ra
@@ -477,5 +531,8 @@ if __name__ == "__main__":
         grb_ra = None
         grb_dec = None
     dest = args.dest
-    data_path = args.datapath
+    if args.datapath is None:
+        data_path = get_nu_obs.get_seq(grbtime, config_path)[6]
+    else:
+        data_path = args.datapath
     make_report(grbtime, grb_ra, grb_dec, name, dest, data_path, config_path)
