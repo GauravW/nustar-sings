@@ -522,7 +522,7 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     config = {
-        "auto.offset.reset": "earliest",
+        # "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
         "group.id": "NuSTAR SINGS",
     }
