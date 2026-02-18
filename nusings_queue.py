@@ -26,8 +26,8 @@ from datetime import time
 import sqlite3
 import astropy.time as Time
 import astropy.units as u
-from config import load_config
 import subprocess as subp
+from nusings_config import load_config
 import glob
 from message_slack import send_slack_message, send_slack_files
 
@@ -203,7 +203,8 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
 
     for entry in pending_entries:
         print(f"Pending entry: {entry}")
-        send_slack_message(f"Processing pending triggered search entry: {entry}", channel_id=config["slack"]["slack-ts-notices-id"])
+        if config["slack"]["slack-ts-reports-status"]:
+            send_slack_message(f"Processing pending triggered search entry: {entry}", channel_id=config["slack"]["slack-ts-reports-id"])
         NuID, trigger_time, ra, dec, missions_list, queue_status = entry
         essential_data_path = config["sings-paths"]["essential-data-path"]
         dest_dir = config["sings-paths"]["ts-products-dir"]
@@ -242,7 +243,8 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
                 queue_status = "processed"
                 print(f"Search complete for entry {NuID}.")
                 print("Sending the files on slack...")
-                send_ts_products_on_slack(output_dir, NuID)
+                if config["slack"]["slack-ts-reports-status"]:
+                    send_ts_products_on_slack(output_dir, NuID)
             else:
                 queue_status = "pending"
                 print(f"Search not complete for entry {NuID}. Still pending.")
