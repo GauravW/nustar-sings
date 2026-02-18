@@ -29,7 +29,7 @@ import astropy.units as u
 from config import load_config
 import subprocess as subp
 import glob
-from message_slack import send_slack_message
+from message_slack import send_slack_message, send_slack_files
 
 
 def create_nuid_from_isot(trigger_time_isot):
@@ -83,9 +83,10 @@ def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
         (time_threshold.iso,),
     )
     new_notices = gcn_cursor.fetchall()
-
+    
     for notice in new_notices:
         _, _, mission, _, trigger_time, ra, dec, _, _ = notice
+        print(f"Processing notice: Mission: {mission}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}")
         # check if a notice with similar trigger time exists in the queue (within 100s)
         ts_cursor.execute(
             """
@@ -165,6 +166,12 @@ def send_ts_products_on_slack(output_dir, NuID):
 
     files_to_send = glob.glob(f"{output_dir}/*pdf")
     print(f"Files to send for {NuID}: {files_to_send}")
+    message = f"Triggered search products for {NuID}:\n" + "\n".join(files_to_send)
+    config = load_config("nusings_config.yaml")
+    send_slack_files(files_to_send, message, channel_id=config["slack"]["slack-ts-reports-id"])
+    # return all ok
+    return True
+
 
 
 def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
@@ -196,6 +203,7 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
 
     for entry in pending_entries:
         print(f"Pending entry: {entry}")
+        send_slack_message(f"Processing pending triggered search entry: {entry}", channel_id=config["slack"]["slack-ts-notices-id"])
         NuID, trigger_time, ra, dec, missions_list, queue_status = entry
         essential_data_path = config["sings-paths"]["essential-data-path"]
         dest_dir = config["sings-paths"]["ts-products-dir"]
@@ -211,7 +219,8 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
         else:
             command = f"python make_grb_report_callable.py {NuID} --ra {ra} --dec {dec}\
                   --trigger_time {trigger_time} --config_path {essential_data_path} --dest {year_dir}"
-        subp.run(command, shell=True)
+        print(f"Running command for entry {NuID}: {command}")
+        # subp.call(command, shell=True)
 
         log_file = f"{year_dir}/{NuID}/{NuID}_queue_log.txt"
         with open(log_file, "w") as f:
@@ -246,6 +255,22 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
             (queue_status, NuID),
         )
         ts_conn.commit()
+    
+    # find the entries that are still pending
+    ts_cursor.execute(
+        """
+        SELECT * FROM ts_queue
+        WHERE queue_status = 'pending'
+    """,
+    )
+    still_pending_entries = ts_cursor.fetchall()
+    # send a slack notification about the pending entries
+    if still_pending_entries:
+        message = "Pending triggered searches:\n"
+        for entry in still_pending_entries:
+            NuID, trigger_time, ra, dec, missions_list, queue_status = entry
+            message += f"- NuID: {NuID}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}, Missions: {missions_list}\n"
+        send_slack_message(message, channel_id=config["slack"]["slack-ts-notices-id"])
 
     ts_conn.close()
 
