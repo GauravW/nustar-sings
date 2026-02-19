@@ -394,6 +394,7 @@ def parse_circulars(notice, topic, db_name):
     print(f"Mission: {mission}, Circular ID: {circ_id}, Subject: {subject}")
     # Not adding the circulars to the DB for now.
     # Send slack message only instead later.
+    circ_id = f"{circ_id}: {subject}"
     return circ_id, Time.now().isot
 
 

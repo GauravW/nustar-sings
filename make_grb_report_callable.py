@@ -41,6 +41,7 @@ def make_report(
     tbins = int(trange / 5)  # 5 second bins
 
     infile = f"{config_path}/aft.txt"
+    print(f"Reading AFT file: {infile}")
     with open(infile, "r") as f:
         for line in f:
             if line.startswith(";"):
@@ -56,6 +57,7 @@ def make_report(
     #    print(seqid)
 
     infile = f"{config_path}/observing_schedule.txt"
+    print(f"Reading observing schedule file: {infile}")
     with open(infile, "r") as f:
         for line in f:
             if seqid in line:
@@ -74,7 +76,7 @@ def make_report(
     try:
         coord = SkyCoord(grb_ra, grb_dec, unit=(u.deg, u.deg))
     except:
-        #        print('Skipping visibility check')
+        print('Skipping visibility check')
         set = False
 
     if set:
@@ -102,6 +104,10 @@ def make_report(
     hka_file = os.path.join(hkdir, f"nu{seqid}A_fpm.hk")
     hkb_file = os.path.join(hkdir, f"nu{seqid}B_fpm.hk")
     attorb_file = os.path.join(evdir, f"nu{seqid}A.attorb")
+    print("Looking for the following files:")
+    print(f"  {hka_file}")
+    print(f"  {hkb_file}")
+    print(f"  {attorb_file}")
 
     if not os.path.exists(hka_file):
         print(f"Missing {hka_file}")
@@ -119,6 +125,8 @@ def make_report(
     hkb = hkb[((hkb["TIME"] > lowlim) & (hkb["TIME"] < highlim))]
 
     if len(hka) < 10:
+        print(f"Not enough HK data points for {name}, skipping report.")
+        print("This likely means that the data is not yet available.")
         return
 
     hka_time = ns.met_to_time(hka["TIME"])
@@ -154,6 +162,10 @@ def make_report(
     eva_file = os.path.join(evdir, f"nu{seqid}A_uf.evt")
     evb_file = os.path.join(evdir, f"nu{seqid}B_uf.evt")
     attorb_file = os.path.join(evdir, f"nu{seqid}A.attorb")
+    print("Looking for the following files:")
+    print(f"  {eva_file}")
+    print(f"  {evb_file}")
+    print(f"  {attorb_file}")
 
     eva, hdra = getdata(eva_file, header=True)
     evb = getdata(evb_file)
@@ -178,7 +190,7 @@ def make_report(
         grb_utc = ns.met_to_time(grb_met)
         hka_rel = (hka_time - grb_utc).to_value("sec")
         hkb_rel = (hkb_time - grb_utc).to_value("sec")
-
+        print(f"Plotting shield rates")
         ax0.step(
             hka_rel, hka["SHLDLO"], label="SHLDLO_A", linewidth=0.5, color="#d8b365"
         )
@@ -201,7 +213,8 @@ def make_report(
         ax0.set_title("Shield Rates")
         ax0.set_xlabel("Seconds from GRB_UTC")
         ax0.set_ylabel("Counts/s")
-
+        
+        print(f"Plotting detrended shield rates")
         ax1.grid()
         ax1.step(hka_rel, sub_a, label="SHLDLO A Sub", linewidth=0.5, color="#8c510a")
         ax1.step(hkb_rel, sub_b, label="SHLDLO B Sub", linewidth=0.5, color="#01665e")
@@ -215,7 +228,18 @@ def make_report(
         ax1.legend()
 
         ### Solar stuff
+        print("Making GOES plot")
         in_goes = f"{config_path}/xrays-7-day.json"
+        # check if this exists or has been downloaded in the last hour, if not download it from NOAA
+        if not os.path.exists(in_goes):
+            print(f"GOES data file {in_goes} not found. Downloading from NOAA.")
+            url = "https://services.swpc.noaa.gov/json/goes/primary/xrays-7-day.json"
+            os.system(f"wget {url} -O {in_goes}")
+        elif (Time.now() - Time(os.path.getmtime(in_goes), format="unix")).sec > 3600:
+            print(f"GOES data file {in_goes} is older than 1 hour. Downloading new data from NOAA.")
+            url = "https://services.swpc.noaa.gov/json/goes/primary/xrays-7-day.json"
+            os.system(f"wget {url} -O {in_goes}")
+        
         df = pd.read_json(in_goes)
         df["time_tag"] = pd.to_datetime(df["time_tag"], format="%Y-%m-%dT%H:%M:%SZ")
         lowlim_solar = lowlim - 3600
@@ -319,6 +343,7 @@ def make_report(
         ax2.set_title("GOES X-ray Flux")
 
     ### Geographic plot
+    print("Making SAA plot")
     # Define vertices here:
     vertices = [[260, -6.25], [350, -6.25], [330, 6.25], [310, 6.25], [260, -6.25]]
     codes = [
@@ -342,6 +367,7 @@ def make_report(
     ax3.set_title("SAA Check")
 
     ## X-ray counts
+    print("Making X-ray count plots")
     with time_support(format="iso"):
         tbins = int(trange / 5)
         hista, edgesa = histogram(
@@ -365,6 +391,7 @@ def make_report(
         ax4.set_xlabel("Seconds from GRB_UTC")
         ax4.set_ylabel("Counts per bin")
 
+        print("Making X-ray count plots with finer bins")
         tbins = int(trange / 0.25)
         hista, edgesa = histogram(
             eva[(ena > 100)]["TIME"], range=(lowlim, highlim), bins=tbins
@@ -386,6 +413,7 @@ def make_report(
         ax5.legend()
         ax5.set_xlabel("Seconds from GRB_UTC")
         ax5.set_ylabel("Counts per bin")
+        print(f"Saving report at {dest}/{name}/grb_report_{name}.pdf")
 
     # grb_number = name.replace("grb", "")
     # set a title for the whole figure with the GRB name and time
@@ -395,6 +423,7 @@ def make_report(
     plt.savefig(f"{dest}/{name}/grb_report_{name}.pdf")
 
     # CsI lightcurve
+    print("Making CsI lightcurve PDF")
     ax = plt.figure(figsize=(8, 6)).subplots()
     ax.axvline(0, color="green", linestyle="--", alpha=0.5, label="GRB Time")
     ax.step(hka_rel, hka["SHLDLO"], label="Shield A", where="post")
@@ -406,6 +435,7 @@ def make_report(
     plt.savefig(f"{dest}/{name}/{name}_CsI_lc.pdf", dpi=300)
 
     # CZT lightcurve (use the following snippet)
+    print("Making CZT lightcurve PDF")
     met0 = grb_met - 300
     met1 = grb_met + 300
     ax = plt.figure(figsize=(8, 6)).subplots()
@@ -446,6 +476,7 @@ def make_report(
     logfile = os.path.join(dest, name, f"grb_report_{name}.log")
     with open(logfile, "a") as f:
         f.write(out + "\n\n")
+    print(f"Run log saved to {logfile}")
 
 
 def grb_visibility(grbtime, coord, config_path):
@@ -499,25 +530,25 @@ if __name__ == "__main__":
         "--dec", type=float, help="Declination of the GRB (optional, in degrees)"
     )
     parser.add_argument(
-        "--dest",
+        "--dest_path",
         type=str,
         default="./data/",
         help="Destination directory to save the report (default: ./data/)",
     )
     parser.add_argument(
-        "--datapath",
+        "--data_path",
         type=str,
         help="Path to data directory. If not provided, it will be determined from the observing schedule. Eg.: /disk/bifrost/nustar/fltops/81202301_GS_1354m64/81202301002",
     )
     parser.add_argument(
-        "--config_data",
+        "--config_path",
         type=str,
         default="./data/",
         help="Path to directory containing xrays-7-day.json, aft.txt, observing_schedule.txt, and NuSTAR.tle",
     )
     args = parser.parse_args()
-
-    config_path = args.config_data
+    # add a bunch of print statements throughout the code to help with the flow of the code
+    config_path = args.config_path
     ns = info.NuSTAR()
     config_file = load_config("nusings_config.yaml")
     # grbtime = Time("2025-10-07 19:37:51.50")
@@ -530,9 +561,14 @@ if __name__ == "__main__":
         print("RA and DEC not provided, skipping visibility check.")
         grb_ra = None
         grb_dec = None
-    dest = args.dest
-    if args.datapath is None:
+    dest = args.dest_path
+    if args.data_path is None:
         data_path = get_nu_obs.get_seq(grbtime, config_path)[6]
     else:
-        data_path = args.datapath
-    make_report(grbtime, grb_ra, grb_dec, name, dest, data_path, config_path)
+        data_path = args.data_path
+    print(f"Making report for {name} at {grbtime.iso} UTC with RA={grb_ra} and DEC={grb_dec}.")
+    print(f"Provided data path: {data_path}, config path: {config_path}, destination directory: {dest}")
+    try:
+        make_report(grbtime, grb_ra, grb_dec, name, dest, data_path, config_path)
+    except Exception as e:
+        print(f"Error making report for {name}: {e}")

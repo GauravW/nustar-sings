@@ -22,9 +22,9 @@ Note:
 """
 
 import os
-from datetime import time
+import time
 import sqlite3
-import astropy.time as Time
+from astropy.time import Time
 import astropy.units as u
 import subprocess as subp
 from nusings_config import load_config
@@ -40,7 +40,7 @@ def create_nuid_from_isot(trigger_time_isot):
     Returns:
         str: NuID in the format 'NUTSYYYYMMDDTHHMMSS'
     """
-    t = Time.Time(trigger_time_isot, format="isot", scale="utc")
+    t = Time(trigger_time_isot, format="isot", scale="utc")
     nuid = f"NUTS{t.strftime('%Y%m%dT%H%M%S')}"
     return nuid
 
@@ -73,6 +73,9 @@ def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
 
     current_time = Time.now()
     time_threshold = current_time - (ts_back_search * u.day)
+    print(
+        f"Current time: {current_time.iso}, Time threshold for new notices: {time_threshold.iso}"
+    )
 
     gcn_cursor.execute(
         """
@@ -83,10 +86,12 @@ def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
         (time_threshold.iso,),
     )
     new_notices = gcn_cursor.fetchall()
-    
+
     for notice in new_notices:
         _, _, mission, _, trigger_time, ra, dec, _, _ = notice
-        print(f"Processing notice: Mission: {mission}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}")
+        print(
+            f"\nProcessing notice: Mission: {mission}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}"
+        )
         # check if a notice with similar trigger time exists in the queue (within 100s)
         ts_cursor.execute(
             """
@@ -100,12 +105,20 @@ def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
         # if exists, update missions_list. If this new mission is swift then use the new ra, dec
         # if the ra, dec is updated, then the queue status is reset to pending
         if existing_entry:
+            print(f"Found existing entry for notice: {existing_entry[0]}")
             NuID, _, _, _, existing_missions_list, _ = existing_entry[0]
             existing_missions = existing_missions_list.split(",")
+            print(f"Existing missions list for this entry: {existing_missions}")
             if mission not in existing_missions:
+                print(
+                    f"Mission {mission} not in existing missions list {existing_missions}. Updating the entry."
+                )
                 existing_missions.append(mission)
                 updated_missions_list = ",".join(existing_missions)
-                if mission == "swift" or mission == "einstein_probe":
+                if mission == "Swift-BAT" or mission == "Einstein-Probe-WXT":
+                    print(
+                        f"Since this is a {mission} notice, updating the RA/Dec, and queue status is pending."
+                    )
                     ts_cursor.execute(
                         """
                         UPDATE ts_queue
@@ -123,13 +136,25 @@ def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
                     """,
                         (updated_missions_list, NuID),
                     )
-            if mission in existing_missions and mission == "Fermi":
+                    print(
+                        f"Updated the missions list for entry {NuID} to {updated_missions_list}."
+                    )
+            elif mission in existing_missions and mission == "Fermi-GBM":
                 # update the ra, dec only if the mission list doesn't already contain swift or einstein probe.
                 # this is to cater for the updated notices that fermi sends out
+                print(
+                    f"Mission {mission} is Fermi and already in the missions list. Checking if RA/Dec needs to be updated."
+                )
                 if (
-                    "swift" not in existing_missions
-                    and "einstein_probe" not in existing_missions
+                    "Swift-BAT" not in existing_missions
+                    and "Einstein-Probe-WXT" not in existing_missions
                 ):
+                    print(
+                        "Did not find Swift-BAT or Einstein-Probe-WXT in the existing missions list."
+                    )
+                    print(
+                        "Updating the RA/Dec with the new Fermi values, and setting queue status to pending."
+                    )
                     ts_cursor.execute(
                         """
                         UPDATE ts_queue
@@ -141,6 +166,9 @@ def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
 
         # if not exists, create a new entry in the queue with status "pending"
         else:
+            print(
+                "No existing entry found for notice. Creating a new entry in the queue with status pending."
+            )
             NuID = create_nuid_from_isot(trigger_time)
             ts_cursor.execute(
                 """
@@ -168,10 +196,11 @@ def send_ts_products_on_slack(output_dir, NuID):
     print(f"Files to send for {NuID}: {files_to_send}")
     message = f"Triggered search products for {NuID}:\n" + "\n".join(files_to_send)
     config = load_config("nusings_config.yaml")
-    send_slack_files(files_to_send, message, channel_id=config["slack"]["slack-ts-reports-id"])
+    send_slack_files(
+        files_to_send, message, channel_id=config["slack"]["slack-ts-reports-id"]
+    )
     # return all ok
     return True
-
 
 
 def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
@@ -204,7 +233,10 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
     for entry in pending_entries:
         print(f"Pending entry: {entry}")
         if config["slack"]["slack-ts-reports-status"]:
-            send_slack_message(f"Processing pending triggered search entry: {entry}", channel_id=config["slack"]["slack-ts-reports-id"])
+            send_slack_message(
+                f"Processing pending triggered search entry: {entry}",
+                channel_id=config["slack"]["slack-ts-reports-id"],
+            )
         NuID, trigger_time, ra, dec, missions_list, queue_status = entry
         essential_data_path = config["sings-paths"]["essential-data-path"]
         dest_dir = config["sings-paths"]["ts-products-dir"]
@@ -215,16 +247,20 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
             os.makedirs(year_dir)
         if ra is None or dec is None:
             print(f"RA or Dec is None for entry {NuID}.")
-            command = f"python make_grb_report_callable.py {NuID} --trigger_time {trigger_time}\
-                  --config_path {essential_data_path} --dest {year_dir}"
+            command = f"python make_grb_report_callable.py {NuID} {trigger_time}\
+                  --config_path {essential_data_path} --dest_path {year_dir}"
         else:
-            command = f"python make_grb_report_callable.py {NuID} --ra {ra} --dec {dec}\
-                  --trigger_time {trigger_time} --config_path {essential_data_path} --dest {year_dir}"
+            command = f"python make_grb_report_callable.py {NuID} {trigger_time} --ra {ra} --dec {dec}\
+                  --config_path {essential_data_path} --dest_path {year_dir}"
         print(f"Running command for entry {NuID}: {command}")
-        # subp.call(command, shell=True)
+        subp.call(command, shell=True)
 
+        output_dir = f"{year_dir}/{NuID}"
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
         log_file = f"{year_dir}/{NuID}/{NuID}_queue_log.txt"
-        with open(log_file, "w") as f:
+        # append the log file every time the same NuID is processed
+        with open(log_file, "a") as f:
             f.write(f"NuID: {NuID}\n")
             f.write(f"Trigger time: {trigger_time}\n")
             f.write(f"RA: {ra}\n")
@@ -234,20 +270,24 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
             f.write(f"Command run: {command}\n")
             f.write(f"Run time: {Time.now().iso}\n")
             f.write("\n\n")
-        # check the number of files in the output directory for this NuID. If there are 4 or more files, we assume the search is complete and successful. This is a placeholder check and should be replaced with a more robust check based on the actual output of the search pipeline.
-        output_dir = f"{year_dir}/{NuID}"
+        # check the number of files in the output directory for this NuID. If there are 4 or more files, we assume the search is complete and successful.
+        # This is a placeholder check and could be replaced with a more robust check based on the actual output of the search pipeline.
         if os.path.exists(output_dir):
             num_files = len(os.listdir(output_dir))
             print(f"Number of files in output directory for entry {NuID}: {num_files}")
             if num_files >= 4:
                 queue_status = "processed"
-                print(f"Search complete for entry {NuID}.")
-                print("Sending the files on slack...")
+                print(
+                    f"Search complete for entry {NuID}. Setting queue status to processed."
+                )
                 if config["slack"]["slack-ts-reports-status"]:
-                    send_ts_products_on_slack(output_dir, NuID)
+                    print(f"Sending triggered search products for entry {NuID} on slack.")
+                    files_path = f"{output_dir}/*"
+                    message = f"Triggered search products for {NuID}:\n"
+                    send_ts_products_on_slack(files_path, message, channel_id=config["slack"]["slack-ts-reports-id"])
             else:
                 queue_status = "pending"
-                print(f"Search not complete for entry {NuID}. Still pending.")
+                print(f"Search not complete for entry {NuID}. Still pending.\n\n")
         ts_cursor.execute(
             """
             UPDATE ts_queue
@@ -257,7 +297,7 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
             (queue_status, NuID),
         )
         ts_conn.commit()
-    
+
     # find the entries that are still pending
     ts_cursor.execute(
         """
@@ -288,7 +328,32 @@ if __name__ == "__main__":
 
     # TODO: change this in the future to something like watchdog
     interval = config["ts-config"]["interval"]  # seconds
-    while True:
-        merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search)
-        process_pending_queue_entries(config, ts_queue_db_path, ts_back_search)
-        time.sleep(interval)
+    try:
+        if config["slack"]["slack-ts-notices-status"]:
+            send_slack_message(
+                "Starting the NuSTAR SINGS triggered search queue script.",
+                channel_id=config["slack"]["slack-ts-notices-id"],
+            )
+        while True:
+            print(
+                f"Checking for new notices and pending queue entries at {Time.now().iso}..."
+            )
+            merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search)
+            print(f"Processing pending queue entries at {Time.now().iso}...")
+            process_pending_queue_entries(config, ts_queue_db_path, ts_back_search)
+            print(f"Sleeping for {interval} seconds...\n\n")
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nExiting the script.")
+        if config["slack"]["slack-ts-notices-status"]:
+            send_slack_message(
+                "Stopping the NuSTAR SINGS triggered search queue script.",
+                channel_id=config["slack"]["slack-ts-notices-id"],
+            )
+    except Exception as e:
+        print(f"\nError in the script: {e}")
+        if config["slack"]["slack-ts-notices-status"]:
+            send_slack_message(
+                f"Error in the NuSTAR SINGS triggered search queue script: {e}",
+                channel_id=config["slack"]["slack-ts-notices-id"],
+            )

@@ -4,7 +4,7 @@ nustar-data-dir: "/disk/bifrost/nustar/fltops/"
 
 sings-paths:
   main-dir: "/home/gaurav/sings/"
-  essential-data-path: "/home/gaurav/sings/sings-products/essential-data/"
+  essential-data-path: "/home/gaurav/sings/config_data/"
   gcn-db-path: "/home/gaurav/sings/sings-products/gcn-notices-sings.db"
   notice-archive-dir: "/home/gaurav/sings/sings-products/notices/"
   notices-log: "/home/gaurav/sings/sings-products/notices/notice-log.txt"
@@ -14,7 +14,7 @@ sings-paths:
 slack:
   slack-ts-reports: "sings-ts-reports"
   slack-ts-reports-id: "C0AFBGF5XRQ"
-  slack-ts-reports-status: 0 # 0: off, 1: on
+  slack-ts-reports-status: 1 # 0: off, 1: on
   slack-ts-notices: "sings-ts-notices"
   slack-ts-notices-id: "C0AEW3T775M"
   slack-ts-notices-status: 1 # 0: off, 1: on
