@@ -421,6 +421,8 @@ def make_report(
     plt.tight_layout()
     print(f"Saving report at {dest}/{name}/grb_report_{name}.pdf")
     plt.savefig(f"{dest}/{name}/grb_report_{name}.pdf")
+    # save a low res version for slack sharing
+    plt.savefig(f"{dest}/{name}/grb_report_{name}.png", dpi=100)
 
     # CsI lightcurve
     print("Making CsI lightcurve PDF")
@@ -433,6 +435,7 @@ def make_report(
     ax.legend()
     plt.tight_layout()
     plt.savefig(f"{dest}/{name}/{name}_CsI_lc.pdf", dpi=300)
+    plt.savefig(f"{dest}/{name}/{name}_CsI_lc.png", dpi=100)
 
     # CZT lightcurve (use the following snippet)
     print("Making CZT lightcurve PDF")
@@ -463,7 +466,8 @@ def make_report(
     ax.legend()
     plt.tight_layout()
     plt.savefig(f"{dest}/{name}/{name}_CZT_lc.pdf", dpi=300)
-
+    plt.savefig(f"{dest}/{name}/{name}_CZT_lc.png", dpi=100)
+    
     header = "Name, OBSID/SEQID, Start Time, Burst Time, End Time, RA, Dec, Offset to Boresight (deg), Separation from Geocenter (deg), Time of run (UTC)"
     values = f"{name},{socname}/{seqid},{t0.iso},{grbtime.iso},{t1.iso},{grb_ra},{grb_dec},{boresight_offset:8.2f},{sep.value:8.2f}, {Time.now().iso}"
     keys = [k.strip() for k in header.split(",")]

@@ -183,7 +183,7 @@ def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
     ts_conn.close()
 
 
-def send_ts_products_on_slack(output_dir, NuID):
+def send_ts_products_on_slack(output_dir, NuID, channel_id):
     """
     Send the triggered search products on slack.
     Args:
@@ -192,13 +192,12 @@ def send_ts_products_on_slack(output_dir, NuID):
     """
     # This function will send the triggered search products on slack. The implementation of this function will depend on how we want to format the message and which slack channel we want to send it to. For now, we will just print the files that we would send.
 
-    files_to_send = glob.glob(f"{output_dir}/*pdf")
+    # send the png files and the grb_report_*log file
+    files_to_send = glob.glob(f"{output_dir}/*png")
+    files_to_send += glob.glob(f"{output_dir}/*log")
     print(f"Files to send for {NuID}: {files_to_send}")
     message = f"Triggered search products for {NuID}:\n" + "\n".join(files_to_send)
-    config = load_config("nusings_config.yaml")
-    send_slack_files(
-        files_to_send, message, channel_id=config["slack"]["slack-ts-reports-id"]
-    )
+    send_slack_files(files_to_send, message, channel_id)
     # return all ok
     return True
 
@@ -281,10 +280,16 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
                     f"Search complete for entry {NuID}. Setting queue status to processed."
                 )
                 if config["slack"]["slack-ts-reports-status"]:
-                    print(f"Sending triggered search products for entry {NuID} on slack.")
+                    print(
+                        f"Sending triggered search products for entry {NuID} on slack."
+                    )
                     files_path = f"{output_dir}/*"
                     message = f"Triggered search products for {NuID}:\n"
-                    send_ts_products_on_slack(files_path, message, channel_id=config["slack"]["slack-ts-reports-id"])
+                    send_ts_products_on_slack(
+                        files_path,
+                        message,
+                        channel_id=config["slack"]["slack-ts-reports-id"],
+                    )
             else:
                 queue_status = "pending"
                 print(f"Search not complete for entry {NuID}. Still pending.\n\n")
