@@ -190,15 +190,15 @@ def send_ts_products_on_slack(output_dir, NuID, channel_id):
         output_dir (str): Directory where the triggered search products are stored.
         NuID (str): NuID of the triggered search.
     """
-    # This function will send the triggered search products on slack. The implementation of this function will depend on how we want to format the message and which slack channel we want to send it to. For now, we will just print the files that we would send.
-
-    # send the png files and the grb_report_*log file
     files_to_send = glob.glob(f"{output_dir}/*png")
-    files_to_send += glob.glob(f"{output_dir}/*log")
     print(f"Files to send for {NuID}: {files_to_send}")
-    message = f"Triggered search products for {NuID}:\n" + "\n".join(files_to_send)
+    message = f"Triggered search products for {NuID}:\n"
     send_slack_files(files_to_send, message, channel_id)
-    # return all ok
+    time.sleep(5)
+    log_file = glob.glob(f"{output_dir}/*log")
+    send_slack_files(log_file, f"Triggered search details for {NuID}:", channel_id)
+    time.sleep(5)
+    # added the sleep to avoid hitting rate limits and to ensure the files are sent in order.
     return True
 
 
@@ -258,7 +258,6 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
         log_file = f"{year_dir}/{NuID}/{NuID}_queue_log.txt"
-        # append the log file every time the same NuID is processed
         with open(log_file, "a") as f:
             f.write(f"NuID: {NuID}\n")
             f.write(f"Trigger time: {trigger_time}\n")
@@ -275,21 +274,18 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
             num_files = len(os.listdir(output_dir))
             print(f"Number of files in output directory for entry {NuID}: {num_files}")
             if num_files >= 4:
-                queue_status = "processed"
-                print(
-                    f"Search complete for entry {NuID}. Setting queue status to processed."
-                )
                 if config["slack"]["slack-ts-reports-status"]:
                     print(
                         f"Sending triggered search products for entry {NuID} on slack."
                     )
-                    files_path = f"{output_dir}/*"
-                    message = f"Triggered search products for {NuID}:\n"
+                    files_path = f"{output_dir}/"
                     send_ts_products_on_slack(
                         files_path,
-                        message,
+                        NuID,
                         channel_id=config["slack"]["slack-ts-reports-id"],
                     )
+                    print(f"Changing the status of entry {NuID} to processed.\n\n")
+                    queue_status = "processed"
             else:
                 queue_status = "pending"
                 print(f"Search not complete for entry {NuID}. Still pending.\n\n")
@@ -302,22 +298,48 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
             (queue_status, NuID),
         )
         ts_conn.commit()
-
-    # find the entries that are still pending
+    
+    # find the entries that are still pending and are within interval day old
     ts_cursor.execute(
         """
         SELECT * FROM ts_queue
         WHERE queue_status = 'pending'
+        AND trigger_time >= ?
+        ORDER BY trigger_time ASC
     """,
+        (time_threshold.iso,)
     )
     still_pending_entries = ts_cursor.fetchall()
     # send a slack notification about the pending entries
     if still_pending_entries:
-        message = "Pending triggered searches:\n"
+        message = f"Pending triggered searches in the last {ts_back_search} days:\n"
         for entry in still_pending_entries:
             NuID, trigger_time, ra, dec, missions_list, queue_status = entry
             message += f"- NuID: {NuID}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}, Missions: {missions_list}\n"
-        send_slack_message(message, channel_id=config["slack"]["slack-ts-notices-id"])
+        if config["slack"]["slack-ts-notices-status"]:
+            send_slack_message(
+                message, channel_id=config["slack"]["slack-ts-notices-id"]
+            )
+    # repeat the same for all the processed entries in the last ts_back_search days
+    ts_cursor.execute(
+        """
+        SELECT * FROM ts_queue
+        WHERE queue_status = 'processed'
+        AND trigger_time >= ?
+        ORDER BY trigger_time ASC
+    """,
+        (time_threshold.iso,),
+    )
+    processed_entries = ts_cursor.fetchall()
+    if processed_entries:
+        message = f"Processed triggered searches in the last {ts_back_search} days:\n"
+        for entry in processed_entries:
+            NuID, trigger_time, ra, dec, missions_list, queue_status = entry
+            message += f"- NuID: {NuID}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}, Missions: {missions_list}\n"
+        if config["slack"]["slack-ts-notices-status"]:
+            send_slack_message(
+                message, channel_id=config["slack"]["slack-ts-notices-id"]
+            )
 
     ts_conn.close()
 
@@ -341,10 +363,10 @@ if __name__ == "__main__":
             )
         while True:
             print(
-                f"Checking for new notices and pending queue entries at {Time.now().iso}..."
+                f"\n\nChecking for new notices and pending queue entries at {Time.now().iso}..."
             )
             merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search)
-            print(f"Processing pending queue entries at {Time.now().iso}...")
+            print(f"\n\nProcessing pending queue entries at {Time.now().iso}...")
             process_pending_queue_entries(config, ts_queue_db_path, ts_back_search)
             print(f"Sleeping for {interval} seconds...\n\n")
             time.sleep(interval)

@@ -26,5 +26,5 @@ slack:
   slack-bs-status: 0 # 0: off, 1: on
 
 ts-config:
-  ts-back-search: 1 # days to look back for TS products
+  ts-back-search: 2 # days to look back for TS products
   interval: 3600 # seconds between checks for new notices in the queue
