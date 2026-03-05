@@ -3,13 +3,13 @@
 nustar-data-dir: "/disk/bifrost/nustar/fltops/"
 
 sings-paths:
-  main-dir: "/home/gaurav/sings/"
-  essential-data-path: "/home/gaurav/sings/config_data/"
-  gcn-db-path: "/home/gaurav/sings/sings-products/gcn-notices-sings.db"
-  notice-archive-dir: "/home/gaurav/sings/sings-products/notices/"
-  notices-log: "/home/gaurav/sings/sings-products/notices/notice-log.txt"
-  ts-queue-db: "/home/gaurav/sings/sings-products/ts-queue.db"
-  ts-products-dir: "/home/gaurav/sings/sings-products/ts-products/"
+  main-dir: "/disk/bifrost/gaurav/sings"
+  essential-data-path: "/disk/bifrost/gaurav/sings/config_data/"
+  gcn-db-path: "/disk/bifrost/gaurav/sings/sings-products/gcn-notices-sings.db"
+  notice-archive-dir: "/disk/bifrost/gaurav/sings/sings-products/notices/"
+  notices-log: "/disk/bifrost/gaurav/sings/sings-products/notices/notice-log.txt"
+  ts-queue-db: "/disk/bifrost/gaurav/sings/sings-products/ts-queue.db"
+  ts-products-dir: "/disk/bifrost/gaurav/sings/sings-products/ts-products/"
   
 slack:
   slack-ts-reports: "sings-ts-reports"

@@ -34,7 +34,7 @@ def make_report(
     config_path="./data/",
 ):
     grb_met = ns.time_to_met(grbtime)
-    trange = 600
+    trange = 300
     lowlim = grb_met - 0.5 * trange
     highlim = grb_met + 0.5 * trange
 
@@ -76,7 +76,7 @@ def make_report(
     try:
         coord = SkyCoord(grb_ra, grb_dec, unit=(u.deg, u.deg))
     except:
-        print('Skipping visibility check')
+        print("Skipping visibility check")
         set = False
 
     if set:
@@ -199,7 +199,7 @@ def make_report(
         )
 
         ax0.grid()
-        ax0.set_ylim(ymin_a * 0.5, 10e3)
+        ax0.set_ylim(ymin_a * 0.5, ymax_a * 2)
         ax0.plot([0, 0], [ymin_a * 0.5, 10e3], linestyle="dotted", color="#7fbf7b")
         ax0.step(
             hka_rel, hka_smth, label="SHLDLO_A Smoothed", linewidth=0.5, color="#8c510a"
@@ -213,7 +213,7 @@ def make_report(
         ax0.set_title("Shield Rates")
         ax0.set_xlabel("Seconds from GRB_UTC")
         ax0.set_ylabel("Counts/s")
-        
+
         print(f"Plotting detrended shield rates")
         ax1.grid()
         ax1.step(hka_rel, sub_a, label="SHLDLO A Sub", linewidth=0.5, color="#8c510a")
@@ -236,10 +236,12 @@ def make_report(
             url = "https://services.swpc.noaa.gov/json/goes/primary/xrays-7-day.json"
             os.system(f"wget {url} -O {in_goes}")
         elif (Time.now() - Time(os.path.getmtime(in_goes), format="unix")).sec > 3600:
-            print(f"GOES data file {in_goes} is older than 1 hour. Downloading new data from NOAA.")
+            print(
+                f"GOES data file {in_goes} is older than 1 hour. Downloading new data from NOAA."
+            )
             url = "https://services.swpc.noaa.gov/json/goes/primary/xrays-7-day.json"
             os.system(f"wget {url} -O {in_goes}")
-        
+
         df = pd.read_json(in_goes)
         df["time_tag"] = pd.to_datetime(df["time_tag"], format="%Y-%m-%dT%H:%M:%SZ")
         lowlim_solar = lowlim - 3600
@@ -439,8 +441,8 @@ def make_report(
 
     # CZT lightcurve (use the following snippet)
     print("Making CZT lightcurve PDF")
-    met0 = grb_met - 300
-    met1 = grb_met + 300
+    met0 = grb_met - trange * 0.5
+    met1 = grb_met + trange * 0.5
     ax = plt.figure(figsize=(8, 6)).subplots()
     ev2B = evb[(evb["TIME"] <= met1) & (evb["TIME"] > met0) & (evb["PI"] > 2460)]
     ev2A = eva[(eva["TIME"] <= met1) & (eva["TIME"] > met0) & (eva["PI"] > 2460)]
@@ -455,10 +457,10 @@ def make_report(
     ct_rel = (ct - grb_utc).to_value("sec")
 
     ax.step(
-        ct_rel, hista / widths, where="post", color="#fc8d59", alpha=0.4, label="FPMA"
+        ct_rel, hista / widths, where="post", color="#fc8d59", alpha=0.7, label="FPMA"
     )
     ax.step(
-        ct_rel, histb / widths, where="post", color="#4575b4", alpha=0.4, label="FPMB"
+        ct_rel, histb / widths, where="post", color="#4575b4", alpha=0.7, label="FPMB"
     )
     ax.axvline(0, color="green", linestyle="--", alpha=0.5, label="GRB Time")
     ax.set_ylabel("CZT > 100 keV Counts / sec", fontsize=12)
@@ -467,7 +469,7 @@ def make_report(
     plt.tight_layout()
     plt.savefig(f"{dest}/{name}/{name}_CZT_lc.pdf", dpi=300)
     plt.savefig(f"{dest}/{name}/{name}_CZT_lc.png", dpi=100)
-    
+
     header = "Name, OBSID/SEQID, Start Time, Burst Time, End Time, RA, Dec, Offset to Boresight (deg), Separation from Geocenter (deg), Time of run (UTC)"
     values = f"{name},{socname}/{seqid},{t0.iso},{grbtime.iso},{t1.iso},{grb_ra},{grb_dec},{boresight_offset:8.2f},{sep.value:8.2f}, {Time.now().iso}"
     keys = [k.strip() for k in header.split(",")]
@@ -554,7 +556,7 @@ if __name__ == "__main__":
     # add a bunch of print statements throughout the code to help with the flow of the code
     config_path = args.config_path
     ns = info.NuSTAR()
-    config_file = load_config("nusings_config.yaml")
+    config_file = load_config(f"{config_path}/nusings_config.yaml")
     # grbtime = Time("2025-10-07 19:37:51.50")
     name = args.name  # NuID
     grbtime = Time(args.time)
@@ -566,12 +568,19 @@ if __name__ == "__main__":
         grb_ra = None
         grb_dec = None
     dest = args.dest_path
+    # check if the dest/name directory exists, if not create it
+    if not os.path.exists(f"{dest}/{name}"):
+        os.makedirs(f"{dest}/{name}")
     if args.data_path is None:
         data_path = get_nu_obs.get_seq(grbtime, config_path)[6]
     else:
         data_path = args.data_path
-    print(f"Making report for {name} at {grbtime.iso} UTC with RA={grb_ra} and DEC={grb_dec}.")
-    print(f"Provided data path: {data_path}, config path: {config_path}, destination directory: {dest}")
+    print(
+        f"Making report for {name} at {grbtime.iso} UTC with RA={grb_ra} and DEC={grb_dec}."
+    )
+    print(
+        f"Provided data path: {data_path}, config path: {config_path}, destination directory: {dest}"
+    )
     try:
         make_report(grbtime, grb_ra, grb_dec, name, dest, data_path, config_path)
     except Exception as e:

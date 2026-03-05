@@ -45,20 +45,72 @@ def create_nuid_from_isot(trigger_time_isot):
     return nuid
 
 
+MISSION_POLICY = {
+    "Swift-BAT": {"priority": 100},
+    "Einstein-Probe-WXT": {"priority": 90},
+    "SVOM-Eclairs": {"priority": 80},
+    "SVOM-GRM": {"priority": 70},
+    "CALET-GBM": {"priority": 20},
+    "Fermi-GBM": {"priority": 10},
+    "IceCube": {"priority": 5},
+    # everything else defaults to priority 0
+}
+
+
+def get_mission_policy(mission):
+    for key in MISSION_POLICY:
+        if key in mission:
+            return MISSION_POLICY[key]
+    return {"priority": 0}
+
+
+def should_update_position(
+    new_mission,
+    new_notice_time,
+    owner_mission,
+    owner_notice_time,
+):
+    new_priority = get_mission_policy(new_mission)["priority"]
+    owner_priority = (
+        get_mission_policy(owner_mission)["priority"]
+        if owner_mission is not None
+        else -1
+    )
+
+    # No owner yet
+    if owner_mission is None:
+        return True, "No existing position owner."
+
+    # Higher priority always wins
+    if new_priority > owner_priority:
+        print(
+            f"New mission {new_mission} has higher priority ({new_priority}) than current owner {owner_mission} ({owner_priority}). Updating position."
+        )
+        return True
+
+    # Lower priority never wins
+    if new_priority < owner_priority:
+        print(
+            f"New mission {new_mission} has lower priority ({new_priority}) than current owner {owner_mission} ({owner_priority}). Not updating position."
+        )
+        return False
+
+    # Same priority: only newer notice can update
+    print(
+        f"New mission {new_mission} has same priority ({new_priority}) as current owner {owner_mission} ({owner_priority}). Comparing notice times."
+    )
+    return Time(new_notice_time, format="isot") > Time(owner_notice_time, format="isot")
+
+
 def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
-    """
-    Merge new GCN notices from gcn_db_path to the triggered search queue db at ts_queue_db_path.
-    Args:
-        gcn_db_path (str): Path to the GCN notices database.
-        ts_queue_db_path (str): Path to the triggered search queue database.
-        ts_back_search (int): Number of days back to search for new notices.
-    """
+
     gcn_conn = sqlite3.connect(gcn_db_path)
     gcn_cursor = gcn_conn.cursor()
 
     ts_conn = sqlite3.connect(ts_queue_db_path)
     ts_cursor = ts_conn.cursor()
 
+    # --- Ensure schema ---
     ts_cursor.execute("""
         CREATE TABLE IF NOT EXISTS ts_queue (
             NuID TEXT PRIMARY KEY,
@@ -66,116 +118,110 @@ def merge_new_notices_to_queue(gcn_db_path, ts_queue_db_path, ts_back_search):
             ra REAL,
             dec REAL,
             missions_list TEXT,
-            queue_status TEXT
+            queue_status TEXT,
+            position_owner TEXT,
+            position_owner_notice_time TEXT
         )
     """)
     ts_conn.commit()
 
     current_time = Time.now()
     time_threshold = current_time - (ts_back_search * u.day)
-    print(
-        f"Current time: {current_time.iso}, Time threshold for new notices: {time_threshold.iso}"
-    )
 
     gcn_cursor.execute(
         """
         SELECT * FROM notices
         WHERE trigger_time >= ?
         ORDER BY trigger_time ASC
-    """,
+        """,
         (time_threshold.iso,),
     )
     new_notices = gcn_cursor.fetchall()
 
     for notice in new_notices:
-        _, _, mission, _, trigger_time, ra, dec, _, _ = notice
-        print(
-            f"\nProcessing notice: Mission: {mission}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}"
-        )
-        # check if a notice with similar trigger time exists in the queue (within 100s)
+        _, _, new_mission, _, trigger_time, new_ra, new_dec, _, new_notice_time = notice
+
         ts_cursor.execute(
             """
             SELECT * FROM ts_queue
             WHERE ABS(strftime('%s', trigger_time) - strftime('%s', ?)) <= 100
-        """,
+            """,
             (trigger_time,),
         )
-        existing_entry = ts_cursor.fetchall()
+        rows = ts_cursor.fetchall()
 
-        # if exists, update missions_list. If this new mission is swift then use the new ra, dec
-        # if the ra, dec is updated, then the queue status is reset to pending
-        if existing_entry:
-            print(f"Found existing entry for notice: {existing_entry[0]}")
-            NuID, _, _, _, existing_missions_list, _ = existing_entry[0]
-            existing_missions = existing_missions_list.split(",")
-            print(f"Existing missions list for this entry: {existing_missions}")
-            if mission not in existing_missions:
-                print(
-                    f"Mission {mission} not in existing missions list {existing_missions}. Updating the entry."
-                )
-                existing_missions.append(mission)
-                updated_missions_list = ",".join(existing_missions)
-                if mission == "Swift-BAT" or mission == "Einstein-Probe-WXT":
-                    print(
-                        f"Since this is a {mission} notice, updating the RA/Dec, and queue status is pending."
-                    )
-                    ts_cursor.execute(
-                        """
-                        UPDATE ts_queue
-                        SET missions_list = ?, ra = ?, dec = ?, queue_status = ?
-                        WHERE NuID = ?
-                    """,
-                        (updated_missions_list, ra, dec, "pending", NuID),
-                    )
-                else:
-                    ts_cursor.execute(
-                        """
-                        UPDATE ts_queue
-                        SET missions_list = ?
-                        WHERE NuID = ?
-                    """,
-                        (updated_missions_list, NuID),
-                    )
-                    print(
-                        f"Updated the missions list for entry {NuID} to {updated_missions_list}."
-                    )
-            elif mission in existing_missions and mission == "Fermi-GBM":
-                # update the ra, dec only if the mission list doesn't already contain swift or einstein probe.
-                # this is to cater for the updated notices that fermi sends out
-                print(
-                    f"Mission {mission} is Fermi and already in the missions list. Checking if RA/Dec needs to be updated."
-                )
-                if (
-                    "Swift-BAT" not in existing_missions
-                    and "Einstein-Probe-WXT" not in existing_missions
-                ):
-                    print(
-                        "Did not find Swift-BAT or Einstein-Probe-WXT in the existing missions list."
-                    )
-                    print(
-                        "Updating the RA/Dec with the new Fermi values, and setting queue status to pending."
-                    )
-                    ts_cursor.execute(
-                        """
-                        UPDATE ts_queue
-                        SET ra = ?, dec = ?, queue_status = ?
-                        WHERE NuID = ?
-                    """,
-                        (ra, dec, "pending", NuID),
-                    )
+        if rows:
+            (
+                NuID,
+                _,
+                ra,
+                dec,
+                missions_list,
+                queue_status,
+                owner_mission,
+                owner_notice_time,
+            ) = rows[0]
 
-        # if not exists, create a new entry in the queue with status "pending"
-        else:
-            print(
-                "No existing entry found for notice. Creating a new entry in the queue with status pending."
+            missions = missions_list.split(",") if missions_list else []
+            if new_mission not in missions:
+                missions.append(new_mission)
+
+            update_position = should_update_position(
+                new_mission,
+                new_notice_time,
+                owner_mission,
+                owner_notice_time,
             )
+
+            if update_position and new_ra is not None and new_dec is not None:
+                ts_cursor.execute(
+                    """
+                    UPDATE ts_queue
+                    SET ra = ?, dec = ?, queue_status = 'pending',
+                        missions_list = ?, position_owner = ?,
+                        position_owner_notice_time = ?
+                    WHERE NuID = ?
+                    """,
+                    (
+                        new_ra,
+                        new_dec,
+                        ",".join(sorted(missions)),
+                        new_mission,
+                        new_notice_time,
+                        NuID,
+                    ),
+                )
+            else:
+                ts_cursor.execute(
+                    """
+                    UPDATE ts_queue
+                    SET missions_list = ?
+                    WHERE NuID = ?
+                    """,
+                    (",".join(sorted(missions)), NuID),
+                )
+
+        else:
             NuID = create_nuid_from_isot(trigger_time)
+
             ts_cursor.execute(
                 """
-                INSERT INTO ts_queue (NuID, trigger_time, ra, dec, missions_list, queue_status)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """,
-                (NuID, trigger_time, ra, dec, mission, "pending"),
+                INSERT INTO ts_queue (
+                    NuID, trigger_time, ra, dec,
+                    missions_list, queue_status,
+                    position_owner, position_owner_notice_time
+                )
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                (
+                    NuID,
+                    trigger_time,
+                    new_ra,
+                    new_dec,
+                    new_mission,
+                    new_mission if new_ra is not None else None,
+                    new_notice_time if new_ra is not None else None,
+                ),
             )
 
     ts_conn.commit()
@@ -231,16 +277,25 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
 
     for entry in pending_entries:
         print(f"Pending entry: {entry}")
-        if config["slack"]["slack-ts-reports-status"]:
-            send_slack_message(
-                f"Processing pending triggered search entry: {entry}",
-                channel_id=config["slack"]["slack-ts-reports-id"],
-            )
-        NuID, trigger_time, ra, dec, missions_list, queue_status = entry
+        (
+            NuID,
+            trigger_time,
+            ra,
+            dec,
+            missions_list,
+            queue_status,
+            pos_owner,
+            pos_owner_notice_time,
+        ) = entry
         essential_data_path = config["sings-paths"]["essential-data-path"]
         dest_dir = config["sings-paths"]["ts-products-dir"]
         trigger_year = Time(trigger_time).strftime("%Y")
-        # check if the folder exists.
+        ts_cursor.execute(
+            "UPDATE ts_queue SET queue_status = 'processing' WHERE NuID = ?",
+            (NuID,),
+        )
+        ts_conn.commit()
+
         year_dir = os.path.join(dest_dir, trigger_year)
         if not os.path.exists(year_dir):
             os.makedirs(year_dir)
@@ -265,6 +320,8 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
             f.write(f"Dec: {dec}\n")
             f.write(f"Missions list: {missions_list}\n")
             f.write(f"Queue status: {queue_status}\n")
+            f.write(f"Position owner: {pos_owner}\n")
+            f.write(f"Position owner notice time: {pos_owner_notice_time}\n")
             f.write(f"Command run: {command}\n")
             f.write(f"Run time: {Time.now().iso}\n")
             f.write("\n\n")
@@ -274,7 +331,13 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
             num_files = len(os.listdir(output_dir))
             print(f"Number of files in output directory for entry {NuID}: {num_files}")
             if num_files >= 4:
+                print(f"Changing the status of entry {NuID} to processed.\n\n")
+                queue_status = "processed"
                 if config["slack"]["slack-ts-reports-status"]:
+                    send_slack_message(
+                        f"Processing pending triggered search entry: {entry}",
+                        channel_id=config["slack"]["slack-ts-reports-id"],
+                    )
                     print(
                         f"Sending triggered search products for entry {NuID} on slack."
                     )
@@ -284,8 +347,6 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
                         NuID,
                         channel_id=config["slack"]["slack-ts-reports-id"],
                     )
-                    print(f"Changing the status of entry {NuID} to processed.\n\n")
-                    queue_status = "processed"
             else:
                 queue_status = "pending"
                 print(f"Search not complete for entry {NuID}. Still pending.\n\n")
@@ -298,49 +359,6 @@ def process_pending_queue_entries(config, ts_queue_db_path, ts_back_search):
             (queue_status, NuID),
         )
         ts_conn.commit()
-    
-    # find the entries that are still pending and are within interval day old
-    ts_cursor.execute(
-        """
-        SELECT * FROM ts_queue
-        WHERE queue_status = 'pending'
-        AND trigger_time >= ?
-        ORDER BY trigger_time ASC
-    """,
-        (time_threshold.iso,)
-    )
-    still_pending_entries = ts_cursor.fetchall()
-    # send a slack notification about the pending entries
-    if still_pending_entries:
-        message = f"Pending triggered searches in the last {ts_back_search} days:\n"
-        for entry in still_pending_entries:
-            NuID, trigger_time, ra, dec, missions_list, queue_status = entry
-            message += f"- NuID: {NuID}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}, Missions: {missions_list}\n"
-        if config["slack"]["slack-ts-notices-status"]:
-            send_slack_message(
-                message, channel_id=config["slack"]["slack-ts-notices-id"]
-            )
-    # repeat the same for all the processed entries in the last ts_back_search days
-    ts_cursor.execute(
-        """
-        SELECT * FROM ts_queue
-        WHERE queue_status = 'processed'
-        AND trigger_time >= ?
-        ORDER BY trigger_time ASC
-    """,
-        (time_threshold.iso,),
-    )
-    processed_entries = ts_cursor.fetchall()
-    if processed_entries:
-        message = f"Processed triggered searches in the last {ts_back_search} days:\n"
-        for entry in processed_entries:
-            NuID, trigger_time, ra, dec, missions_list, queue_status = entry
-            message += f"- NuID: {NuID}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}, Missions: {missions_list}\n"
-        if config["slack"]["slack-ts-notices-status"]:
-            send_slack_message(
-                message, channel_id=config["slack"]["slack-ts-notices-id"]
-            )
-
     ts_conn.close()
 
 
@@ -369,6 +387,72 @@ if __name__ == "__main__":
             print(f"\n\nProcessing pending queue entries at {Time.now().iso}...")
             process_pending_queue_entries(config, ts_queue_db_path, ts_back_search)
             print(f"Sleeping for {interval} seconds...\n\n")
+            time_now = Time.now()
+            hour_now = int(time_now.strftime("%H"))
+            minute_now = int(time_now.strftime("%M"))
+            # send a slack message every day whenever the time is between 12:00 and 12:30 UTC about pending and processed entries in the last ts_back_search days.
+            if hour_now == 12 and minute_now < 30:
+                ts_cursor = sqlite3.connect(ts_queue_db_path).cursor()
+                time_threshold = time_now - (ts_back_search * u.day)
+                # find the entries that are still pending and are within interval day old
+                ts_cursor.execute(
+                    """
+                    SELECT * FROM ts_queue
+                    WHERE queue_status = 'pending'
+                    AND trigger_time >= ?
+                    ORDER BY trigger_time ASC
+                """,
+                    (time_threshold.iso,),
+                )
+                still_pending_entries = ts_cursor.fetchall()
+                # send a slack notification about the pending entries
+                if still_pending_entries:
+                    message = f"Pending triggered searches in the last {ts_back_search} days:\n"
+                    for entry in still_pending_entries:
+                        (
+                            NuID,
+                            trigger_time,
+                            ra,
+                            dec,
+                            missions_list,
+                            queue_status,
+                            pos_owner,
+                            pos_owner_notice_time,
+                        ) = entry
+                        message += f"- NuID: {NuID}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}, Missions: {missions_list}, Position owner: {pos_owner}, Position owner notice time: {pos_owner_notice_time}\n"
+                    if config["slack"]["slack-ts-notices-status"]:
+                        send_slack_message(
+                            message, channel_id=config["slack"]["slack-ts-notices-id"]
+                        )
+                # repeat the same for all the processed entries in the last ts_back_search days
+                ts_cursor.execute(
+                    """
+                    SELECT * FROM ts_queue
+                    WHERE queue_status = 'processed'
+                    AND trigger_time >= ?
+                    ORDER BY trigger_time ASC
+                """,
+                    (time_threshold.iso,),
+                )
+                processed_entries = ts_cursor.fetchall()
+                if processed_entries:
+                    message = f"Processed triggered searches in the last {ts_back_search} days:\n"
+                    for entry in processed_entries:
+                        (
+                            NuID,
+                            trigger_time,
+                            ra,
+                            dec,
+                            missions_list,
+                            queue_status,
+                            pos_owner,
+                            pos_owner_notice_time,
+                        ) = entry
+                        message += f"- NuID: {NuID}, Trigger time: {trigger_time}, RA: {ra}, Dec: {dec}, Missions: {missions_list}, Position owner: {pos_owner}, Position owner notice time: {pos_owner_notice_time}\n"
+                    if config["slack"]["slack-ts-notices-status"]:
+                        send_slack_message(
+                            message, channel_id=config["slack"]["slack-ts-notices-id"]
+                        )
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\nExiting the script.")

@@ -10,6 +10,7 @@ Note:
 import os
 import slack_sdk as slack
 from nusings_config import load_config
+import time
 
 
 def send_slack_message(message, channel_id=None):
@@ -25,6 +26,7 @@ def send_slack_message(message, channel_id=None):
     try:
         response = client.chat_postMessage(channel=channel_id, text=message)
         print(f"Message sent to Slack channel {channel_id}")
+        time.sleep(1)  # Sleep for 1 second to avoid hitting rate limits
     except Exception as e:
         print(f"Error sending message to Slack: {e}")
         raise e
