@@ -27,4 +27,4 @@ slack:
 
 ts-config:
   ts-back-search: 2 # days to look back for TS products
-  interval: 3600 # seconds between checks for new notices in the queue
+  interval: 1800 # seconds between checks for new notices in the queue

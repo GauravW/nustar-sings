@@ -16,6 +16,7 @@ import matplotlib.patches as patches
 import pandas as pd
 import os
 from astropy import units as u
+import numpy as np
 
 from skyfield.api import EarthSatellite, Loader
 
@@ -34,7 +35,7 @@ def make_report(
     config_path="./data/",
 ):
     grb_met = ns.time_to_met(grbtime)
-    trange = 300
+    trange = 200
     lowlim = grb_met - 0.5 * trange
     highlim = grb_met + 0.5 * trange
 
@@ -448,9 +449,9 @@ def make_report(
     ev2A = eva[(eva["TIME"] <= met1) & (eva["TIME"] > met0) & (eva["PI"] > 2460)]
     print(f"Events: A={len(ev2A)}, B={len(ev2B)}")
     fig, ax = plt.subplots(figsize=(8, 6))
-    bins = 350
-    hista, edgesa = histogram(ev2A["TIME"], bins=bins, range=(met0, met1))
-    histb, edgesb = histogram(ev2B["TIME"], bins=bins, range=(met0, met1))
+    bins = np.arange(met0, met1, 1)  # 1 s
+    hista, edgesa = histogram(ev2A["TIME"], bins=bins)
+    histb, edgesb = histogram(ev2B["TIME"], bins=bins)
     widths = edgesa[1:] - edgesa[:-1]
     centers = (edgesa[:-1] + edgesa[1:]) / 2
     ct = ns.met_to_time(centers)
