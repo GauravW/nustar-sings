@@ -10,21 +10,56 @@ sings-paths:
   notices-log: "/disk/bifrost/gaurav/sings/sings-products/notices/notice-log.txt"
   ts-queue-db: "/disk/bifrost/gaurav/sings/sings-products/ts-queue.db"
   ts-products-dir: "/disk/bifrost/gaurav/sings/sings-products/ts-products/"
-  
+
 slack:
   slack-ts-reports: "sings-ts-reports"
   slack-ts-reports-id: "C0AFBGF5XRQ"
-  slack-ts-reports-status: 1 # 0: off, 1: on
+  slack-ts-reports-status: 0 # 0: off, 1: on
   slack-ts-notices: "sings-ts-notices"
   slack-ts-notices-id: "C0AEW3T775M"
   slack-ts-notices-status: 1 # 0: off, 1: on
-  # slack-ts-circulars: "sings-ts-circulars" # put circulars in the same channel as notices for now
-  # slack-ts-circulars-id: "C0AEW3T776M"
-  # slack-ts-circulars-status: 0 # 0: off, 1: on
-  slack-bs-reports: "sings-blind-reports"
-  # slack-bs-reports-id: ""
-  slack-bs-status: 0 # 0: off, 1: on
 
 ts-config:
   ts-back-search: 2 # days to look back for TS products
-  interval: 1800 # seconds between checks for new notices in the queue
+  interval: 3600 # seconds between checks for new notices in the queue
+
+# ---------------- blind search (NUBS) ----------------
+bs_paths:
+  bs_db: "/disk/bifrost/gaurav/sings/sings-products/bs_candidates.db"
+  bs_products_dir: "/disk/bifrost/gaurav/sings/sings-products/bs-products/"
+  obs_dir: "obs-products"
+  cand_dir: "bs-candidates"
+
+bs_config:
+  interval: 1800            # s between queue passes
+  back_search_days: 14      # seqs scheduled in this lookback are checked for new data
+  hk_min_new_rows: 100      # HK rows added since last run -> full rerun of the seq
+  evt_min_new_rows: 100     # event rows added (HK unchanged) -> reports-only rerun
+  group_gap_s: 100          # t0_new - t1_prev <= this -> same candidate
+  ts_match_s: 100           # NUTS within this of a candidate span -> nu_bs_ts_match
+  saa_polygon: [[260, -6.25], [350, -6.25], [330, 2.0], [310, 2.0], [260, -6.25]]
+  max_gap_s: 30             # HK time gap that splits a window (data gaps, not SAA)
+  min_bins: 100
+  w_base: 300               # running-median detrending window size (s)
+  algos: ["mf", "bb"]
+  mf:
+    timescales: [4, 16, 64, 128, 256]
+    thresh: 5.0
+    floor: 8
+    nmin: 4
+    edge_pad: 64
+    merge_gap: 20
+  bb:
+    bb_downsample: 4
+    p0: 0.05                
+    block_thresh: 6
+    floor: 4
+    nmin: 5
+    center: true
+    min_bb_bins: 32
+    edge_pad: 64
+    merge_gap: 20
+  slack_bs_reports_status: 0   # new-candidate alerts
+  slack_bs_reports_id: ""
+  slack_bs_log_status: 0
+  slack_bs_log_id: ""
