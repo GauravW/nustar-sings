@@ -35,9 +35,9 @@ def make_report(
     config_path="./data/",
 ):
     grb_met = ns.time_to_met(grbtime)
-    trange = 200
-    lowlim = grb_met - 0.5 * trange
-    highlim = grb_met + 0.5 * trange
+    trange = 300
+    lowlim = grb_met - 0.4 * trange
+    highlim = grb_met + 0.6 * trange
 
     tbins = int(trange / 5)  # 5 second bins
 
@@ -101,6 +101,7 @@ def make_report(
     # print(seqpath)
     hkdir = os.path.join(data_path, "hk")
     evdir = os.path.join(data_path, "event_cl")
+    ufdir = os.path.join(data_path, "event_uf")
 
     hka_file = os.path.join(hkdir, f"nu{seqid}A_fpm.hk")
     hkb_file = os.path.join(hkdir, f"nu{seqid}B_fpm.hk")
@@ -163,6 +164,8 @@ def make_report(
     eva_file = os.path.join(evdir, f"nu{seqid}A_uf.evt")
     evb_file = os.path.join(evdir, f"nu{seqid}B_uf.evt")
     attorb_file = os.path.join(evdir, f"nu{seqid}A.attorb")
+    eva_uf_file = os.path.join(ufdir, f"nu{seqid}A_uf.evt")
+    evb_uf_file = os.path.join(ufdir, f"nu{seqid}B_uf.evt")
     print("Looking for the following files:")
     print(f"  {eva_file}")
     print(f"  {evb_file}")
@@ -420,7 +423,7 @@ def make_report(
 
     # grb_number = name.replace("grb", "")
     # set a title for the whole figure with the GRB name and time
-    fig.suptitle(f"GRB {name}\n{grbtime.iso} UTC", fontsize=16)
+    fig.suptitle(f"{name}\n{grbtime.iso} UTC", fontsize=16)
     plt.tight_layout()
     print(f"Saving report at {dest}/{name}/grb_report_{name}.pdf")
     plt.savefig(f"{dest}/{name}/grb_report_{name}.pdf")
@@ -442,8 +445,8 @@ def make_report(
 
     # CZT lightcurve (use the following snippet)
     print("Making CZT lightcurve PDF")
-    met0 = grb_met - trange * 0.5
-    met1 = grb_met + trange * 0.5
+    met0 = lowlim
+    met1 = highlim
     ax = plt.figure(figsize=(8, 6)).subplots()
     ev2B = evb[(evb["TIME"] <= met1) & (evb["TIME"] > met0) & (evb["PI"] > 2460)]
     ev2A = eva[(eva["TIME"] <= met1) & (eva["TIME"] > met0) & (eva["PI"] > 2460)]
@@ -464,7 +467,7 @@ def make_report(
         ct_rel, histb / widths, where="post", color="#4575b4", alpha=0.7, label="FPMB"
     )
     ax.axvline(0, color="green", linestyle="--", alpha=0.5, label="GRB Time")
-    ax.set_ylabel("CZT > 100 keV Counts / sec", fontsize=12)
+    ax.set_ylabel("UF CZT > 100 keV Counts / sec", fontsize=12)
     ax.set_xlabel(f"Seconds since {grbtime.iso} UTC")
     ax.legend()
     plt.tight_layout()
