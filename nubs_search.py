@@ -32,7 +32,14 @@ from astropy.time import Time
 from nustar_gen import info
 from nusings_config import load_config
 import get_nu_obs
-from nubs_algos import ALGOS, running_median, intervals
+from nubs_algos import (
+    ALGOS,
+    running_median,
+    intervals,
+    split_scale,
+    RAW_SPLIT,
+    DET_SPLIT,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ns = info.NuSTAR()
@@ -681,42 +688,45 @@ def plot_obs(d, inside, wins, c, out, title):
     _save(fig, os.path.join(out, "saa_spans.png"))
 
 
-def plot_windows(wins, out):
+def plot_windows(wins, out, title):
     for w in wins:
         x, tag = w["tt"] - w["tt"][0], f"w{w['idx']:02d}"
-        for name, series, ylabel in [
-            (
-                "raw_baseline",
-                [
-                    ("A", w["a"]),
-                    ("B", w["b"]),
-                    ("base A", w["ba"]),
-                    ("base B", w["bb"]),
-                ],
-                "counts/s",
-            ),
-            (
-                "detrended",
-                [("A - base", w["a"] - w["ba"]), ("B - base", w["b"] - w["bb"])],
-                "counts/s",
-            ),
-            (
-                "sigma",
-                [("sigma A", w["sa"]), ("sigma B", w["sb"]), ("sigma comb", w["sc"])],
-                "sigma / bin",
-            ),
+        head = f"{title}  {tag}  start {met2utc(w['tt'][0])}  ({len(x)} bins, {x[-1]:.0f} s)"
+        xlab = f"time since window start (s)    [window start MET {w['tt'][0]:.0f}]"
+        raw = [
+            ("Shield A rate (SHLDLO)", w["a"], 0.4, "C0"),
+            ("Shield B rate (SHLDLO)", w["b"], 0.4, "C1"),
+            ("Shield A baseline (running median)", w["ba"], 1.2, "navy"),
+            ("Shield B baseline (running median)", w["bb"], 1.2, "darkred"),
+        ]
+        det = [
+            ("Shield A rate - baseline", w["a"] - w["ba"], 0.4, "C0"),
+            ("Shield B rate - baseline", w["b"] - w["bb"], 0.4, "C1"),
+        ]
+        for name, series, split, what in [
+            ("raw_baseline", raw, RAW_SPLIT, "Raw shield rates with baseline"),
+            ("detrend", det, DET_SPLIT, "Detrended shield rates"),
         ]:
-            fig, ax = plt.subplots(figsize=(11, 3.5))
-            for lab, y in series:
-                ax.plot(x, y, lw=0.9 if lab.startswith("base") else 0.4, label=lab)
-            (
-                ax.set_xlabel(f"MET - {w['tt'][0]:.0f} (s)"),
-                ax.set_ylabel(ylabel),
-                ax.legend(fontsize=7),
+            fig, ax = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+            for a in ax:
+                for lab, y, lw, col in series:
+                    a.plot(x, y, lw=lw, color=col, label=lab)
+                (
+                    a.set_ylabel("counts/s"),
+                    a.legend(fontsize=7, loc="upper right", ncol=2),
+                )
+            split_scale(ax[1], *split, np.concatenate([y for _, y, _, _ in series]))
+            ax[0].set_title(f"{what}: full linear scale", fontsize=9, loc="left")
+            rng = (
+                f"linear up to {split[1]}" if split[0] is None else f"linear in {split}"
             )
-            ax.set_title(
-                f"{tag}  {met2utc(w['tt'][0])}  {len(x)} bins", fontsize=9, loc="left"
+            ax[1].set_title(
+                f"{what}: {rng} counts/s, log beyond (dash-dot line = break)",
+                fontsize=9,
+                loc="left",
             )
+            ax[1].set_xlabel(xlab)
+            fig.suptitle(head, fontsize=10)
             _save(fig, os.path.join(out, "windows", f"{tag}_{name}.png"))
 
 
@@ -991,7 +1001,7 @@ def main():
             clear_pngs(out, algos)
         os.makedirs(os.path.join(out, "windows"), exist_ok=True)
         plot_obs(d, inside, wins, c, out, f"{obsid}/{seqid}")
-        plot_windows(run_wins, out)
+        plot_windows(run_wins, out, f"{obsid}/{seqid}")
         for a in algos:
             adir = os.path.join(out, f"{a}_algo")
             os.makedirs(adir, exist_ok=True)
@@ -1003,6 +1013,7 @@ def main():
                     c[a],
                     adir,
                     f"w{w['idx']:02d}",
+                    f"{obsid}/{seqid}  w{w['idx']:02d}  start {met2utc(w['tt'][0])}",
                 )
         log.info(f"plots in {out}")
 
