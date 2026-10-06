@@ -33,7 +33,7 @@ bs_paths:
 
 bs_config:
   interval: 1800            # s between queue passes
-  back_search_days: 3      # seqs scheduled in this lookback are checked for new data
+  back_search_days: 7      # seqs scheduled in this lookback are checked for new data
   hk_min_new_rows: 100      # HK rows added since last run -> full rerun of the seq
   evt_min_new_rows: 100     # event rows added (HK unchanged) -> reports-only rerun
   group_gap_s: 100          # t0_new - t1_prev <= this -> same candidate
