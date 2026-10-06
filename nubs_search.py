@@ -52,6 +52,7 @@ SEQ_COLS = dict(
     path="TEXT",
     hk_rows_a="INTEGER",
     hk_rows_b="INTEGER",
+    att_rows="INTEGER",
     evt_rows_a="INTEGER",
     evt_rows_b="INTEGER",
     hk_met0="REAL",
@@ -74,6 +75,7 @@ RUN_COLS = dict(
     params_json="TEXT",
     param_hashes="TEXT",
     hk_rows_a="INTEGER",
+    att_rows="INTEGER",
     hk_rows_b="INTEGER",
     evt_rows_a="INTEGER",
     evt_rows_b="INTEGER",
@@ -281,6 +283,7 @@ def row_counts(f):
     return dict(
         hk_rows_a=file_rows(f["hka"], "HK1FPM"),
         hk_rows_b=file_rows(f["hkb"], "HK1FPM"),
+        att_rows=file_rows(f["att"], 1),
         evt_rows_a=file_rows(f["eva"], 1),
         evt_rows_b=file_rows(f["evb"], 1),
     )
@@ -291,11 +294,18 @@ def _uniq(tab):
     return tab[i]
 
 
-def load_data(f):
+def load_data(f, att_tol):
     hka = _uniq(fits.getdata(f["hka"], "HK1FPM"))
     hkb = _uniq(fits.getdata(f["hkb"], "HK1FPM"))
     att = _uniq(fits.getdata(f["att"], 1))
     t = np.asarray(hka["TIME"], float)
+    ta = np.asarray(att["TIME"], float)
+    # np.interp holds the edge value outside the attorb range, so only trust HK seconds with a nearby attorb sample
+    if len(ta) > 1:
+        k = np.clip(np.searchsorted(ta, t), 1, len(ta) - 1)
+        near = np.minimum(np.abs(t - ta[k - 1]), np.abs(ta[k] - t))
+    else:
+        near = np.abs(t - ta[0]) if len(ta) else np.full(len(t), np.inf)
     tb = np.asarray(hkb["TIME"], float)
     return dict(
         t=t,
@@ -309,14 +319,17 @@ def load_data(f):
         lon=np.interp(
             t, np.asarray(att["TIME"], float), np.asarray(att["SAT_LON"], float)
         ),
+        att_ok=near <= att_tol,
+        n_att=len(ta),
     )
 
 
 def build_windows(d, c):
-    inside = Path(c["saa_polygon"]).contains_points(
-        np.column_stack([d["lon"], d["lat"]])
+    inside = (
+        Path(c["saa_polygon"]).contains_points(np.column_stack([d["lon"], d["lat"]]))
+        & d["att_ok"]
     )
-    idx = np.where(~inside)[0]
+    idx = np.where(~inside & d["att_ok"])[0]
     wins = []
     if idx.size == 0:
         return inside, wins
@@ -718,7 +731,7 @@ def clear_pngs(out, algos):
 
 
 def plot_obs(d, inside, wins, c, out, title):
-    t, t0 = d["t"], d["t"][0]
+    t, t0, ok = d["t"], d["t"][0], d["att_ok"]
     fig, ax = plt.subplots(3, 1, figsize=(14, 12))
     ax[0].plot(t - t0, d["a"], lw=0.3, label="Shield A rate (SHLDLO)")
     ax[0].plot(t - t0, d["b"], lw=0.3, label="Shield B rate (SHLDLO)")
@@ -737,6 +750,14 @@ def plot_obs(d, inside, wins, c, out, title):
             alpha=0.15,
             label="SAA pass (removed)" if k == 0 else None,
         )
+    for k, (i0, i1) in enumerate(intervals(~ok)):
+        ax[1].axvspan(
+            t[i0] - t0,
+            t[i1] - t0,
+            color="0.5",
+            alpha=0.3,
+            label="no attorb (position unknown, not searched)" if k == 0 else None,
+        )
     for w in wins:
         ax[1].axvspan(
             w["tt"][0] - t0,
@@ -754,7 +775,7 @@ def plot_obs(d, inside, wins, c, out, title):
             transform=ax[1].get_xaxis_transform(),
         )
     ax[1].set_title(
-        f"SAA cut in time: {len(wins)} windows (min {c['min_bins']} bins; split at HK gaps > "
+        f"SAA and attorb cuts in time: {len(wins)} windows (min {c['min_bins']} bins; split at HK gaps > "
         f"{c['max_gap_s']} s)",
         fontsize=9,
         loc="left",
@@ -764,19 +785,12 @@ def plot_obs(d, inside, wins, c, out, title):
         ax[1].set_ylabel("counts/s"),
     )
 
+    keep, saa = ok & ~inside, inside
     ax[2].scatter(
-        d["lon"][~inside],
-        d["lat"][~inside],
-        s=1,
-        c="C0",
-        label="orbit outside SAA (kept)",
+        d["lon"][keep], d["lat"][keep], s=1, c="C0", label="orbit outside SAA (kept)"
     )
     ax[2].scatter(
-        d["lon"][inside],
-        d["lat"][inside],
-        s=1,
-        c="r",
-        label="orbit inside SAA (removed)",
+        d["lon"][saa], d["lat"][saa], s=1, c="r", label="orbit inside SAA (removed)"
     )
     ax[2].add_patch(
         patches.PathPatch(
@@ -784,7 +798,8 @@ def plot_obs(d, inside, wins, c, out, title):
         )
     )
     ax[2].set_title(
-        f"SAA cut on the ground track: {100 * inside.mean():.1f}% of the sequence in SAA",
+        f"SAA cut on the ground track (attorb-covered seconds only): "
+        f"{100 * saa.sum() / max(ok.sum(), 1):.1f}% in SAA",
         fontsize=9,
         loc="left",
     )
@@ -794,7 +809,11 @@ def plot_obs(d, inside, wins, c, out, title):
     )
     for a in ax:
         bottom_legend(a)
-    fig.suptitle(f"{title}  {met2utc(t0)} -> {met2utc(t[-1])}", fontsize=11)
+    fig.suptitle(
+        f"{title}  {met2utc(t0)} -> {met2utc(t[-1])}\nHK {len(t)} bins   attorb {d['n_att']} rows   "
+        f"HK covered by attorb {ok.sum()} bins ({100 * ok.mean():.0f}%)",
+        fontsize=11,
+    )
     _save(fig, os.path.join(out, "obs_overview.png"))
 
 
@@ -1085,12 +1104,22 @@ def main():
         log.info(f"done in {time.time() - t_run:.1f}s")
         return
 
-    d = load_data(f)
+    d = load_data(f, c["max_gap_s"])
     inside, wins = build_windows(d, c)
     exp = sum(w["tt"][-1] - w["tt"][0] for w in wins)
+    n_ok = int(d["att_ok"].sum())
+    saa_frac = inside.sum() / max(n_ok, 1)
     log.info(
         f"data MET {d['t'][0]:.0f}-{d['t'][-1]:.0f}  ({met2utc(d['t'][0])} -> {met2utc(d['t'][-1])})  "
-        f"{len(d['t'])} bins  SAA {100 * inside.mean():.1f}%  {len(wins)} windows  exp {exp / 1e3:.1f} ks"
+        f"{len(d['t'])} bins  SAA {100 * saa_frac:.1f}%  {len(wins)} windows  exp {exp / 1e3:.1f} ks"
+    )
+    log.info(
+        f"attorb {d['n_att']} rows, covers {n_ok}/{len(d['t'])} HK bins ({100 * n_ok / len(d['t']):.0f}%)"
+        + (
+            f", {len(d['t']) - n_ok} s of HK not searched (no attorb)"
+            if n_ok < len(d["t"])
+            else ""
+        )
     )
     for w in wins:
         log.info(
@@ -1207,7 +1236,7 @@ def main():
             n_bins=len(d["t"]),
             met0=float(d["t"][0]),
             met1=float(d["t"][-1]),
-            saa_frac=float(inside.mean()),
+            saa_frac=float(saa_frac),
             n_windows=len(wins),
             exp_s=float(exp),
             n_triggers=json.dumps(

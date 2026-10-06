@@ -6,7 +6,7 @@ Note:
 - Every pass lists sequences from observing_schedule.txt in the last back_search_days and compares
   FITS row counts (headers only) with seq_status in bs_candidates.db.
 - HK on disk but attorb not yet -> waiting (no run, no failure; runs once attorb appears).
-- HK grew by >= hk_min_new_rows -> full nubs_search.py on the sequence.
+- HK or attorb grew by >= hk_min_new_rows -> full nubs_search.py on the sequence (HK without attorb is never searched).
 - only events grew by >= evt_min_new_rows -> nubs_search.py --reports_only (CZT panels change, triggers don't).
 - Slack (channels in the slack block of the config), each message sent once:
     reports channel: new-candidate alert (slack_sent flag), coincident NUBS-NUTS alert (coinc_sent flag)
@@ -38,7 +38,7 @@ from nubs_search import (
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PREV = ["hk_rows_a", "hk_rows_b", "evt_rows_a", "evt_rows_b", "status"]
+PREV = ["hk_rows_a", "hk_rows_b", "att_rows", "evt_rows_a", "evt_rows_b", "status"]
 
 
 def post(on, ch, msg, files=None):
@@ -95,8 +95,18 @@ def decide(prev, cnt, has_att, c, retry_failed):
         (cnt["evt_rows_b"] or 0) - (prev["evt_rows_b"] or 0),
     )
     if prev["status"] == "failed":
-        return "search" if (retry_failed or dhk > 0 or devt > 0) else "skip"
-    if dhk >= c["hk_min_new_rows"]:
+        return (
+            "search"
+            if (
+                retry_failed
+                or dhk > 0
+                or devt > 0
+                or (cnt["att_rows"] or 0) > (prev["att_rows"] or 0)
+            )
+            else "skip"
+        )
+    datt = (cnt["att_rows"] or 0) - (prev["att_rows"] or 0)
+    if dhk >= c["hk_min_new_rows"] or datt >= c["hk_min_new_rows"]:
         return "search"
     if devt >= c["evt_min_new_rows"]:
         return "reports"
