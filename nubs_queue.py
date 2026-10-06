@@ -5,7 +5,8 @@ Author: Gaurav Waratkar
 Note:
 - Every pass lists sequences from observing_schedule.txt in the last back_search_days and compares
   FITS row counts (headers only) with seq_status in bs_candidates.db.
-- HK grew by >= hk_min_new_rows -> full nubs_search.py on the sequence.
+- HK on disk but attorb not yet -> waiting (no run, no failure; runs once attorb appears).
+- HK or attorb grew by >= hk_min_new_rows -> full nubs_search.py on the sequence (HK without attorb is never searched).
 - only events grew by >= evt_min_new_rows -> nubs_search.py --reports_only (CZT panels change, triggers don't).
 - Slack (channels in the slack block of the config), each message sent once:
     reports channel: new-candidate alert (slack_sent flag), coincident NUBS-NUTS alert (coinc_sent flag)
@@ -37,7 +38,7 @@ from nubs_search import (
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PREV = ["hk_rows_a", "hk_rows_b", "evt_rows_a", "evt_rows_b", "status"]
+PREV = ["hk_rows_a", "hk_rows_b", "att_rows", "evt_rows_a", "evt_rows_b", "status"]
 
 
 def post(on, ch, msg, files=None):
@@ -78,9 +79,11 @@ def list_recent_seqs(cfg, days):
     return seqs
 
 
-def decide(prev, cnt, c, retry_failed):
+def decide(prev, cnt, has_att, c, retry_failed):
     if cnt["hk_rows_a"] is None or cnt["hk_rows_b"] is None:
         return "no_data"
+    if not has_att:
+        return "waiting"
     if prev is None or prev["hk_rows_a"] is None:
         return "search"
     dhk = max(
@@ -92,8 +95,18 @@ def decide(prev, cnt, c, retry_failed):
         (cnt["evt_rows_b"] or 0) - (prev["evt_rows_b"] or 0),
     )
     if prev["status"] == "failed":
-        return "search" if (retry_failed or dhk > 0 or devt > 0) else "skip"
-    if dhk >= c["hk_min_new_rows"]:
+        return (
+            "search"
+            if (
+                retry_failed
+                or dhk > 0
+                or devt > 0
+                or (cnt["att_rows"] or 0) > (prev["att_rows"] or 0)
+            )
+            else "skip"
+        )
+    datt = (cnt["att_rows"] or 0) - (prev["att_rows"] or 0)
+    if dhk >= c["hk_min_new_rows"] or datt >= c["hk_min_new_rows"]:
         return "search"
     if devt >= c["evt_min_new_rows"]:
         return "reports"
@@ -138,9 +151,14 @@ def alert_new(cur, rep, cand_dir, cutoff):
     ).fetchall()
     for r in rows:
         nuid, obsid, seqid, utc, dur = r[:5]
+        stats = "  ".join(
+            f"{a}: n {r[5 + 2 * i]} max {r[6 + 2 * i]:.1f}"
+            for i, a in enumerate(ALGOS)
+            if r[5 + 2 * i]
+        )
         msg = (
             f"New NuBS candidate {nuid}\nTrigger time (UTC): {utc}  span {dur:.0f} s  {obsid}/{seqid}\n"
-            f"NuTS coincidence: {matches(cur, nuid)}"
+            f"{stats}\nNuTS coincidence: {matches(cur, nuid)}"
         )
         d = os.path.join(cand_dir, nuid[4:8], nuid)
         files = [
@@ -185,6 +203,11 @@ def status_msg(cur, seqs, ran, failed, new, check_utc):
     lines = [
         f"NuBS: new data in {len(ran)} seq(s) "
         f"({', '.join(names[:5])}{' ...' if len(names) > 5 else ''}), {len(new)} new candidate(s)"
+        + (
+            f" ({sum(st == 'saa_reject' for _, _, st in new)} SAA-rejected)"
+            if new
+            else ""
+        )
         + (f", {len(failed)} failed ({', '.join(failed[:5])})" if failed else ""),
         f"current obs: {', '.join(current) or 'unknown'}",
         f"last data flowed at (UTC): {flowed or 'n/a'}",
@@ -193,7 +216,12 @@ def status_msg(cur, seqs, ran, failed, new, check_utc):
     ]
     if new:
         lines.append(
-            "new candidates: " + ", ".join(f"{n} [{algos_str(a)}]" for n, a in new)
+            "new candidates: "
+            + ", ".join(
+                f"{n} [{algos_str(a)}]"
+                + (" (saa_reject)" if st == "saa_reject" else "")
+                for n, a, st in new
+            )
         )
     return "\n".join(lines)
 
@@ -205,9 +233,10 @@ def daily_msg(cur):
         "ORDER BY trigger_utc",
         (cut,),
     ).fetchall()
+    n_rej = sum(r[3] == "saa_reject" for r in rows)
     lines = [
         "NuBS daily update:",
-        f"Processed {len(rows)} candidates in the past 1 day:",
+        f"Processed {len(rows)} candidates in the past 1 day ({n_rej} SAA-rejected):",
     ]
     for nuid, utc, algos, st in rows[:50]:
         lines.append(
@@ -253,24 +282,31 @@ def one_pass(args, cfg):
     if args.seqid:
         seqs = {k: v for k, v in seqs.items() if k in args.seqid}
     print(f"\n{t_pass}: {len(seqs)} sequence(s) in the last {days} days")
-    tally = dict(search=0, reports=0, skip=0, no_data=0)
+    tally = dict(search=0, reports=0, skip=0, no_data=0, waiting=0)
     ran, failed = [], []
     for seqid, (obsid, path, _, _) in sorted(seqs.items()):
-        cnt = row_counts(seq_files(path, seqid))
+        f = seq_files(path, seqid)
+        cnt = row_counts(f)
         r = cur.execute(
             f"SELECT {', '.join(PREV)} FROM seq_status WHERE seqid=?", (seqid,)
         ).fetchone()
-        act = decide(dict(zip(PREV, r)) if r else None, cnt, c, args.retry_failed)
+        act = decide(
+            dict(zip(PREV, r)) if r else None,
+            cnt,
+            os.path.exists(f["att"]),
+            c,
+            args.retry_failed,
+        )
         tally[act] += 1
         print(f"{seqid} {obsid}: {act}  {cnt}")
         if args.dry_run:
             continue
         base = dict(seqid=seqid, obsid=obsid, path=path, last_check_utc=now_utc())
-        if act in ("skip", "no_data"):
+        if act in ("skip", "no_data", "waiting"):
             upsert(
                 cur,
                 "seq_status",
-                dict(base, status="no_data") if act == "no_data" else base,
+                base if act == "skip" else dict(base, status=act),
                 "seqid",
             )
             conn.commit()
@@ -293,7 +329,8 @@ def one_pass(args, cfg):
     nuids = [
         x[0]
         for x in cur.execute(
-            "SELECT nuid FROM candidates WHERE status='active' AND trigger_utc>=?",
+            "SELECT nuid FROM candidates WHERE status IN ('active', 'saa_reject') "
+            "AND trigger_utc>=?",
             (cutoff,),
         ).fetchall()
     ]
@@ -303,7 +340,7 @@ def one_pass(args, cfg):
         ):
             print(f"new match {nb} <-> {nt}")
     new = cur.execute(
-        "SELECT nuid, algos FROM candidates WHERE first_seen_utc>=? ORDER BY trigger_utc",
+        "SELECT nuid, algos, status FROM candidates WHERE first_seen_utc>=? ORDER BY trigger_utc",
         (t_pass,),
     ).fetchall()
     cand_dir = os.path.join(bp["bs_products_dir"], bp["cand_dir"])
