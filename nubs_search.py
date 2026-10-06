@@ -37,6 +37,7 @@ from nubs_algos import (
     running_median,
     intervals,
     split_scale,
+    bottom_legend,
     RAW_SPLIT,
     DET_SPLIT,
 )
@@ -127,6 +128,7 @@ CAND_COLS = dict(
     report_status="TEXT",
     report_utc="TEXT",
     slack_sent="INTEGER",
+    coinc_sent="INTEGER",
     first_seen_utc="TEXT",
     last_updated_utc="TEXT",
     tag="TEXT",
@@ -232,6 +234,7 @@ def init_db(conn):
         cand[f"max_{a}"] = "REAL"
     ensure_table(cur, "candidates", cand, "nuid")
     ensure_table(cur, "nu_bs_ts_match", MATCH_COLS, "nubs_id, nuts_id")
+    ensure_table(cur, "queue_state", dict(key="TEXT", value="TEXT"), "key")
     conn.commit()
 
 
@@ -460,7 +463,9 @@ def cand_row(cd, obsid, seqid, run_utc, tag, git):
         row[f"n_{a}"] = len(sel)
         row[f"max_{a}"] = max(sel) if sel else None
     if cd["action"] == "new":
-        row.update(first_seen_utc=run_utc, report_status="pending", slack_sent=0)
+        row.update(
+            first_seen_utc=run_utc, report_status="pending", slack_sent=0, coinc_sent=0
+        )
     elif cd["action"] == "updated":
         row["report_status"] = "pending"
     return row
@@ -641,58 +646,88 @@ def clear_pngs(out, algos):
 
 def plot_obs(d, inside, wins, c, out, title):
     t, t0 = d["t"], d["t"][0]
-    fig, ax = plt.subplots(figsize=(12, 3.5))
-    ax.plot(t - t0, d["a"], lw=0.3, label="SHLDLO A")
-    ax.plot(t - t0, d["b"], lw=0.3, label="SHLDLO B")
+    fig, ax = plt.subplots(3, 1, figsize=(14, 12))
+    ax[0].plot(t - t0, d["a"], lw=0.3, label="Shield A rate (SHLDLO)")
+    ax[0].plot(t - t0, d["b"], lw=0.3, label="Shield B rate (SHLDLO)")
+    ax[0].set_title("Raw shield rates, full sequence", fontsize=9, loc="left")
     (
-        ax.set_xlabel(f"MET - {t0:.0f} (s)"),
-        ax.set_ylabel("counts/s"),
-        ax.legend(fontsize=7),
+        ax[0].set_xlabel(f"time since sequence start (s)    [MET {t0:.0f}]"),
+        ax[0].set_ylabel("counts/s"),
     )
-    ax.set_title(f"{title}  raw shield rates", fontsize=9, loc="left")
-    _save(fig, os.path.join(out, "raw_lc.png"))
 
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.scatter(d["lon"][~inside], d["lat"][~inside], s=1, c="C0", label="kept")
-    ax.scatter(d["lon"][inside], d["lat"][inside], s=1, c="r", label="SAA")
-    ax.add_patch(patches.PathPatch(Path(c["saa_polygon"]), fc="r", alpha=0.15))
-    ax.set_xlabel("SAT_LON"), ax.set_ylabel("SAT_LAT"), ax.legend(fontsize=7)
-    ax.set_title(
-        f"{title}  SAA cut ({100 * inside.mean():.1f}% in SAA)", fontsize=9, loc="left"
-    )
-    _save(fig, os.path.join(out, "saa_lonlat.png"))
-
-    fig, ax = plt.subplots(figsize=(12, 3.5))
-    ax.plot(t - t0, d["a"], lw=0.3, color="C0")
-    for i0, i1 in intervals(inside):
-        ax.axvspan(t[i0] - t0, t[i1] - t0, color="r", alpha=0.15)
+    ax[1].plot(t - t0, d["a"], lw=0.3, color="C0", label="Shield A rate (SHLDLO)")
+    for k, (i0, i1) in enumerate(intervals(inside)):
+        ax[1].axvspan(
+            t[i0] - t0,
+            t[i1] - t0,
+            color="r",
+            alpha=0.15,
+            label="SAA pass (removed)" if k == 0 else None,
+        )
     for w in wins:
-        ax.axvspan(
+        ax[1].axvspan(
             w["tt"][0] - t0,
             w["tt"][-1] - t0,
             color="C2",
             alpha=0.08 + 0.07 * (w["idx"] % 2),
+            label="good window (searched), labelled wXX" if w["idx"] == 0 else None,
         )
-        ax.text(
+        ax[1].text(
             0.5 * (w["tt"][0] + w["tt"][-1]) - t0,
             0.95,
             f"w{w['idx']:02d}",
             fontsize=7,
             ha="center",
-            transform=ax.get_xaxis_transform(),
+            transform=ax[1].get_xaxis_transform(),
         )
-    ax.set_xlabel(f"MET - {t0:.0f} (s)"), ax.set_ylabel("SHLDLO A")
-    ax.set_title(
-        f"{title}  SAA spans (red) and windows (green)", fontsize=9, loc="left"
+    ax[1].set_title(
+        f"SAA cut in time: {len(wins)} windows (min {c['min_bins']} bins; split at HK gaps > "
+        f"{c['max_gap_s']} s)",
+        fontsize=9,
+        loc="left",
     )
-    _save(fig, os.path.join(out, "saa_spans.png"))
+    (
+        ax[1].set_xlabel(f"time since sequence start (s)    [MET {t0:.0f}]"),
+        ax[1].set_ylabel("counts/s"),
+    )
+
+    ax[2].scatter(
+        d["lon"][~inside],
+        d["lat"][~inside],
+        s=1,
+        c="C0",
+        label="orbit outside SAA (kept)",
+    )
+    ax[2].scatter(
+        d["lon"][inside],
+        d["lat"][inside],
+        s=1,
+        c="r",
+        label="orbit inside SAA (removed)",
+    )
+    ax[2].add_patch(
+        patches.PathPatch(
+            Path(c["saa_polygon"]), fc="r", alpha=0.15, label="SAA polygon"
+        )
+    )
+    ax[2].set_title(
+        f"SAA cut on the ground track: {100 * inside.mean():.1f}% of the sequence in SAA",
+        fontsize=9,
+        loc="left",
+    )
+    (
+        ax[2].set_xlabel("satellite longitude (deg)"),
+        ax[2].set_ylabel("satellite latitude (deg)"),
+    )
+    for a in ax:
+        bottom_legend(a)
+    fig.suptitle(f"{title}  {met2utc(t0)} -> {met2utc(t[-1])}", fontsize=11)
+    _save(fig, os.path.join(out, "obs_overview.png"))
 
 
 def plot_windows(wins, out, title):
     for w in wins:
         x, tag = w["tt"] - w["tt"][0], f"w{w['idx']:02d}"
-        head = f"{title}  {tag}  start {met2utc(w['tt'][0])}  ({len(x)} bins, {x[-1]:.0f} s)"
-        xlab = f"time since window start (s)    [window start MET {w['tt'][0]:.0f}]"
         raw = [
             ("Shield A rate (SHLDLO)", w["a"], 0.4, "C0"),
             ("Shield B rate (SHLDLO)", w["b"], 0.4, "C1"),
@@ -703,31 +738,40 @@ def plot_windows(wins, out, title):
             ("Shield A rate - baseline", w["a"] - w["ba"], 0.4, "C0"),
             ("Shield B rate - baseline", w["b"] - w["bb"], 0.4, "C1"),
         ]
-        for name, series, split, what in [
-            ("raw_baseline", raw, RAW_SPLIT, "Raw shield rates with baseline"),
-            ("detrend", det, DET_SPLIT, "Detrended shield rates"),
-        ]:
-            fig, ax = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
-            for a in ax:
-                for lab, y, lw, col in series:
-                    a.plot(x, y, lw=lw, color=col, label=lab)
+        fig, ax = plt.subplots(4, 1, figsize=(14, 14), sharex=True)
+        for k, (series, split, what) in enumerate(
+            [
+                (raw, None, "Raw shield rates with baseline: full linear scale"),
                 (
-                    a.set_ylabel("counts/s"),
-                    a.legend(fontsize=7, loc="upper right", ncol=2),
-                )
-            split_scale(ax[1], *split, np.concatenate([y for _, y, _, _ in series]))
-            ax[0].set_title(f"{what}: full linear scale", fontsize=9, loc="left")
-            rng = (
-                f"linear up to {split[1]}" if split[0] is None else f"linear in {split}"
-            )
-            ax[1].set_title(
-                f"{what}: {rng} counts/s, log beyond (dash-dot line = break)",
-                fontsize=9,
-                loc="left",
-            )
-            ax[1].set_xlabel(xlab)
-            fig.suptitle(head, fontsize=10)
-            _save(fig, os.path.join(out, "windows", f"{tag}_{name}.png"))
+                    raw,
+                    RAW_SPLIT,
+                    f"Raw shield rates with baseline: linear up to "
+                    f"{RAW_SPLIT[1]} counts/s, log above",
+                ),
+                (det, None, "Detrended shield rates: full linear scale"),
+                (
+                    det,
+                    DET_SPLIT,
+                    f"Detrended shield rates: linear in {DET_SPLIT} "
+                    f"counts/s, log beyond",
+                ),
+            ]
+        ):
+            for lab, y, lw, col in series:
+                ax[k].plot(x, y, lw=lw, color=col, label=lab)
+            if split:
+                split_scale(ax[k], *split, np.concatenate([y for _, y, _, _ in series]))
+            ax[k].set_title(what, fontsize=9, loc="left")
+            ax[k].set_ylabel("counts/s")
+            bottom_legend(ax[k])
+        ax[3].set_xlabel(
+            f"time since window start (s)    [window start MET {w['tt'][0]:.0f}]"
+        )
+        fig.suptitle(
+            f"{title}  {tag}  start {met2utc(w['tt'][0])}  ({len(x)} bins, {x[-1]:.0f} s)",
+            fontsize=11,
+        )
+        _save(fig, os.path.join(out, "windows", f"{tag}_window.png"))
 
 
 def plot_trigger_map(cd, d, path, gap):
@@ -744,23 +788,23 @@ def plot_trigger_map(cd, d, path, gap):
                 tr["t1_met"] - tref,
                 color=col,
                 alpha=0.25,
-                label=a if k == 0 else None,
+                label=f"{a} trigger span" if k == 0 else None,
             )
             ax.axvline(tr["tpeak_met"] - tref, color=col, lw=1)
     ax.axvline(
-        cd["t0"] - gap - tref, color="grey", ls=":", label=f"+/-{gap:.0f}s grouping"
+        cd["t0"] - gap - tref,
+        color="grey",
+        ls=":",
+        label=f"grouping zone (+/-{gap:.0f} s)",
     )
     ax.axvline(cd["t1"] + gap - tref, color="grey", ls=":")
-    (
-        ax.set_xlabel(f"seconds from {met2utc(tref)}"),
-        ax.set_ylabel("counts/s"),
-        ax.legend(fontsize=7),
-    )
+    ax.set_xlabel(f"seconds from {met2utc(tref)}"), ax.set_ylabel("counts/s")
     ax.set_title(
         f"{cd['nuid']}  {len(cd['chain'])} trigger(s)  {cd['sig']}",
         fontsize=9,
         loc="left",
     )
+    bottom_legend(ax)
     _save(fig, path)
 
 

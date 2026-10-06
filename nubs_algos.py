@@ -179,6 +179,7 @@ def split_scale(ax, lo, hi, y):
         return out
 
     ax.set_yscale("function", functions=(fwd, inv))
+    ax._split = (fwd, inv)
     base = lo if lo is not None else 0
     ymin, ymax = np.nanmin(y), np.nanmax(y)
     bot = ymin * 1.2 if ymin < base else base
@@ -202,7 +203,27 @@ def _save(fig, path):
     plt.close(fig)
 
 
-def _spans(ax, win, trigs, color, name):
+def bottom_legend(ax, frac=0.2, fontsize=6.5):
+    """Single-row legend in the lower right; the y-range is extended downwards to make room for it."""
+    h, l = ax.get_legend_handles_labels()
+    if not h:
+        return
+    lo, hi = ax.get_ylim()
+    f, i = getattr(ax, "_split", (lambda v: v, lambda v: v))
+    tl, th = float(f(lo)), float(f(hi))
+    ax.set_ylim(float(i(tl - frac * (th - tl))), hi)
+    ax.legend(
+        h,
+        l,
+        loc="lower right",
+        ncol=len(h),
+        fontsize=fontsize,
+        handlelength=1.5,
+        columnspacing=1.0,
+    )
+
+
+def _spans(ax, win, trigs, color, name, label=True):
     t0 = win["tt"][0]
     for k, tr in enumerate(trigs):
         ax.axvspan(
@@ -210,26 +231,25 @@ def _spans(ax, win, trigs, color, name):
             win["tt"][tr["i1"]] - t0,
             color=color,
             alpha=0.3,
-            label=f"{name} trigger span" if k == 0 else None,
+            label=f"{name} trigger span" if k == 0 and label else None,
         )
         ax.axvline(
             win["tt"][tr["ipk"]] - t0,
             color="k",
             ls="--",
             lw=0.8,
-            label="trigger peak" if k == 0 else None,
+            label="trigger peak" if k == 0 and label else None,
         )
 
 
 def _panel(ax, title, ylabel):
     ax.set_title(title, fontsize=9, loc="left")
     ax.set_ylabel(ylabel, fontsize=9)
-    ax.legend(fontsize=7, loc="upper right", ncol=2)
 
 
 def algo_figure(win, trigs, aux, p, name, color, title):
     x = win["tt"] - win["tt"][0]
-    fig, ax = plt.subplots(4, 1, figsize=(12, 14), sharex=True)
+    fig, ax = plt.subplots(4, 1, figsize=(14, 15), sharex=True)
     ax[0].plot(x, win["a"], lw=0.4, label="Shield A rate (SHLDLO)")
     ax[0].plot(x, win["b"], lw=0.4, label="Shield B rate (SHLDLO)")
     ax[0].plot(
@@ -277,8 +297,8 @@ def algo_figure(win, trigs, aux, p, name, color, title):
         label=f"gate open: both shields >= floor for {p['nmin']} consecutive s",
     )
     ax[2].set_ylim(lo, hi)
-    for a in ax:
-        _spans(a, win, trigs, color, name)
+    for k, a in enumerate(ax):
+        _spans(a, win, trigs, color, name, label=k == 0)
     _panel(
         ax[0],
         f"Raw shield rates (linear up to {RAW_SPLIT[1]} counts/s, log above)",
@@ -329,6 +349,8 @@ def plot_mf(win, trigs, aux, p, outdir, tag, title):
         "MF statistic: boxcar-averaged combined significance (trigger = above threshold AND gate open)",
         "sigma (linear -20..60, log beyond)",
     )
+    for a in ax:
+        bottom_legend(a)
     _save(fig, os.path.join(outdir, f"{tag}_mf.png"))
 
 
@@ -362,6 +384,8 @@ def plot_bb(win, trigs, aux, p, outdir, tag, title):
         f"(trigger = block above threshold AND gate open)",
         "sigma (linear -20..60, log beyond)",
     )
+    for a in ax:
+        bottom_legend(a)
     _save(fig, os.path.join(outdir, f"{tag}_bb.png"))
 
 

@@ -1,5 +1,3 @@
-# make a config yaml file
-
 nustar-data-dir: "/disk/bifrost/nustar/fltops/"
 
 sings-paths:
@@ -18,12 +16,15 @@ slack:
   slack-ts-notices: "sings-ts-notices"
   slack-ts-notices-id: "C0AEW3T775M"
   slack-ts-notices-status: 1 # 0: off, 1: on
+  slack_bs_reports_status: 1   # new-candidate alerts
+  slack_bs_reports_id: "C0C6WHVUKNJ"
+  slack_bs_log_status: 1
+  slack_bs_log_id: "C0C6T7V8DKP"
 
 ts-config:
   ts-back-search: 2 # days to look back for TS products
   interval: 3600 # seconds between checks for new notices in the queue
 
-# ---------------- blind search (NUBS) ----------------
 bs_paths:
   bs_db: "/disk/bifrost/gaurav/sings/sings-products/bs_candidates.db"
   bs_products_dir: "/disk/bifrost/gaurav/sings/sings-products/bs-products/"
@@ -32,7 +33,7 @@ bs_paths:
 
 bs_config:
   interval: 1800            # s between queue passes
-  back_search_days: 14      # seqs scheduled in this lookback are checked for new data
+  back_search_days: 1      # seqs scheduled in this lookback are checked for new data
   hk_min_new_rows: 100      # HK rows added since last run -> full rerun of the seq
   evt_min_new_rows: 100     # event rows added (HK unchanged) -> reports-only rerun
   group_gap_s: 100          # t0_new - t1_prev <= this -> same candidate
@@ -59,7 +60,3 @@ bs_config:
     min_bb_bins: 32
     edge_pad: 64
     merge_gap: 20
-  slack_bs_reports_status: 0   # new-candidate alerts
-  slack_bs_reports_id: ""
-  slack_bs_log_status: 0
-  slack_bs_log_id: ""

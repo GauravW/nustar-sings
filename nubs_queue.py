@@ -7,24 +7,51 @@ Note:
   FITS row counts (headers only) with seq_status in bs_candidates.db.
 - HK grew by >= hk_min_new_rows -> full nubs_search.py on the sequence.
 - only events grew by >= evt_min_new_rows -> nubs_search.py --reports_only (CZT panels change, triggers don't).
-- Slack alerts go out only for new candidates (slack_sent flag), with any NUTS matches.
+- Slack (channels in the slack block of the config), each message sent once:
+    reports channel: new-candidate alert (slack_sent flag), coincident NUBS-NUTS alert (coinc_sent flag)
+    log channel: status only on passes with new data or new candidates, daily summary at daily_update_hour
+    (server local time, remembered in queue_state), errors, start/stop.
 """
 
 import os
 import sys
+import json
 import time
 import sqlite3
 import argparse as ag
 import subprocess as subp
 import traceback
+from datetime import datetime
 from astropy.time import Time
 import astropy.units as u
 from nusings_config import load_config
 from nubs_algos import ALGOS
-from nubs_search import init_db, upsert, ts_match, seq_files, row_counts, now_utc
+from nubs_search import (
+    init_db,
+    upsert,
+    ts_match,
+    seq_files,
+    row_counts,
+    now_utc,
+    met2utc,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PREV = ["hk_rows_a", "hk_rows_b", "evt_rows_a", "evt_rows_b", "status"]
+
+
+def post(on, ch, msg, files=None):
+    print(msg)
+    if not (on and ch):
+        return False
+    from message_slack import send_slack_message, send_slack_files
+
+    if files:
+        send_slack_files(files, msg, ch)
+    else:
+        send_slack_message(msg, channel_id=ch)
+    time.sleep(1)
+    return True
 
 
 def list_recent_seqs(cfg, days):
@@ -45,6 +72,8 @@ def list_recent_seqs(cfg, days):
                 seqs[seqid] = (
                     obsid,
                     os.path.join(cfg["nustar-data-dir"], obsid, seqid),
+                    start,
+                    end,
                 )
     return seqs
 
@@ -88,7 +117,18 @@ def run_seq(cfg_path, path, act):
     return r.returncode, (r.stderr.strip()[-500:] or r.stdout.strip()[-500:])
 
 
-def slack_new(cur, c, cand_dir, cutoff, send):
+def algos_str(s):
+    return ", ".join(json.loads(s)) if s else ""
+
+
+def matches(cur, nuid):
+    m = cur.execute(
+        "SELECT nuts_id, dt_s, missions FROM nu_bs_ts_match WHERE nubs_id=?", (nuid,)
+    ).fetchall()
+    return ", ".join(f"{a} ({b:+.0f} s, {c})" for a, b, c in m) or "none"
+
+
+def alert_new(cur, rep, cand_dir, cutoff):
     cols = ", ".join(f"n_{a}, max_{a}" for a in ALGOS)
     rows = cur.execute(
         f"SELECT nuid, obsid, seqid, trigger_utc, duration, {cols} FROM candidates "
@@ -98,23 +138,10 @@ def slack_new(cur, c, cand_dir, cutoff, send):
     ).fetchall()
     for r in rows:
         nuid, obsid, seqid, utc, dur = r[:5]
-        stats = "  ".join(
-            f"{a}: n {r[5 + 2 * i]} max {r[6 + 2 * i]:.1f}"
-            for i, a in enumerate(ALGOS)
-            if r[5 + 2 * i]
-        )
-        m = cur.execute(
-            "SELECT nuts_id, dt_s FROM nu_bs_ts_match WHERE nubs_id=?", (nuid,)
-        ).fetchall()
         msg = (
-            f"New NUBS candidate {nuid}\nUTC {utc}  span {dur:.0f}s  {obsid}/{seqid}\n{stats}\n"
-            f"NUTS match: {', '.join(f'{a} ({b:+.0f}s)' for a, b in m) or 'none'}"
+            f"New NuBS candidate {nuid}\nTrigger time (UTC): {utc}  span {dur:.0f} s  {obsid}/{seqid}\n"
+            f"NuTS coincidence: {matches(cur, nuid)}"
         )
-        print(msg)
-        if not send:
-            continue
-        from message_slack import send_slack_message, send_slack_files
-
         d = os.path.join(cand_dir, nuid[4:8], nuid)
         files = [
             p
@@ -124,35 +151,111 @@ def slack_new(cur, c, cand_dir, cutoff, send):
             )
             if os.path.exists(p)
         ]
-        if files:
-            send_slack_files(files, msg, c["slack_bs_reports_id"])
-        else:
-            send_slack_message(msg, channel_id=c["slack_bs_reports_id"])
-        cur.execute("UPDATE candidates SET slack_sent=1 WHERE nuid=?", (nuid,))
-        time.sleep(2)
+        if post(*rep, msg, files):
+            cur.execute("UPDATE candidates SET slack_sent=1 WHERE nuid=?", (nuid,))
     return len(rows)
 
 
-def notify(c, msg, send):
-    print(msg)
-    if send and c["slack_bs_log_status"] and c["slack_bs_log_id"]:
-        from message_slack import send_slack_message
+def alert_coinc(cur, rep, cutoff):
+    rows = cur.execute(
+        "SELECT nuid, trigger_utc, algos FROM candidates c WHERE status='active' "
+        "AND COALESCE(coinc_sent, 0)=0 AND trigger_utc>=? AND EXISTS "
+        "(SELECT 1 FROM nu_bs_ts_match m WHERE m.nubs_id=c.nuid) ORDER BY trigger_utc",
+        (cutoff,),
+    ).fetchall()
+    for nuid, utc, algos in rows:
+        msg = (
+            f"<!channel> - Coincident NuBS-NuTS candidate found!\n{nuid}  Trigger time (UTC): {utc}  "
+            f"Algos: {algos_str(algos)}\nNuTS: {matches(cur, nuid)}"
+        )
+        if post(*rep, msg):
+            cur.execute("UPDATE candidates SET coinc_sent=1 WHERE nuid=?", (nuid,))
+    return len(rows)
 
-        send_slack_message(msg, channel_id=c["slack_bs_log_id"])
+
+def status_msg(cur, seqs, ran, failed, new, check_utc):
+    now = Time.now().yday
+    current = [f"{o}/{s}" for s, (o, _, st, en) in seqs.items() if st <= now <= en]
+    flowed = cur.execute(
+        "SELECT MAX(MAX(COALESCE(last_search_utc, '')), MAX(COALESCE(last_report_utc, ''))) "
+        "FROM seq_status"
+    ).fetchone()[0]
+    last = cur.execute("SELECT seqid, MAX(hk_met1) FROM seq_status").fetchone()
+    names = [s for s, _ in ran]
+    lines = [
+        f"NuBS: new data in {len(ran)} seq(s) "
+        f"({', '.join(names[:5])}{' ...' if len(names) > 5 else ''}), {len(new)} new candidate(s)"
+        + (f", {len(failed)} failed ({', '.join(failed[:5])})" if failed else ""),
+        f"current obs: {', '.join(current) or 'unknown'}",
+        f"last data flowed at (UTC): {flowed or 'n/a'}",
+        f"last check done at (UTC): {check_utc}",
+        f"last data event at (UTC): {met2utc(last[1]) + f' ({last[0]})' if last[1] else 'n/a'}",
+    ]
+    if new:
+        lines.append(
+            "new candidates: " + ", ".join(f"{n} [{algos_str(a)}]" for n, a in new)
+        )
+    return "\n".join(lines)
+
+
+def daily_msg(cur):
+    cut = (Time.now() - 1 * u.day).isot
+    rows = cur.execute(
+        "SELECT nuid, trigger_utc, algos, status FROM candidates WHERE first_seen_utc>=? "
+        "ORDER BY trigger_utc",
+        (cut,),
+    ).fetchall()
+    lines = [
+        "NuBS daily update:",
+        f"Processed {len(rows)} candidates in the past 1 day:",
+    ]
+    for nuid, utc, algos, st in rows[:50]:
+        lines.append(
+            f"NuID: {nuid}; Trigger time (UTC): {utc}; Algos: {algos_str(algos)}; Coincidences: {matches(cur, nuid)};"
+            + ("" if st == "active" else f" [{st}]")
+        )
+    if len(rows) > 50:
+        lines.append(f"... and {len(rows) - 50} more")
+    n_run, n_seq = cur.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT seqid) FROM obs_runs WHERE run_utc>=? "
+        "AND mode='search'",
+        (cut,),
+    ).fetchone()
+    n_fail = cur.execute(
+        "SELECT COUNT(*) FROM seq_status WHERE status='failed'"
+    ).fetchone()[0]
+    lines.append(
+        f"Health: {n_run} searches on {n_seq} seq(s) in the past 1 day; {n_fail} seq(s) currently failed"
+    )
+    return "\n".join(lines)
+
+
+def maybe_daily(cur, log, hour, dry):
+    today = datetime.now().strftime("%Y-%m-%d")
+    r = cur.execute("SELECT value FROM queue_state WHERE key='last_daily'").fetchone()
+    if datetime.now().hour < hour or (r and r[0] == today) or dry:
+        return
+    post(*log, daily_msg(cur))
+    upsert(cur, "queue_state", dict(key="last_daily", value=today), "key")
 
 
 def one_pass(args, cfg):
-    c, bp = cfg["bs_config"], cfg["bs_paths"]
+    c, bp, sl = cfg["bs_config"], cfg["bs_paths"], cfg["slack"]
+    send = not args.no_slack and not args.dry_run
+    rep = (send and sl["slack_bs_reports_status"], sl["slack_bs_reports_id"])
+    log = (send and sl["slack_bs_log_status"], sl["slack_bs_log_id"])
     days = args.days or c["back_search_days"]
+    t_pass = now_utc()
     conn = sqlite3.connect(bp["bs_db"])
     init_db(conn)
     cur = conn.cursor()
     seqs = list_recent_seqs(cfg, days)
     if args.seqid:
         seqs = {k: v for k, v in seqs.items() if k in args.seqid}
-    print(f"\n{now_utc()}: {len(seqs)} sequence(s) in the last {days} days")
-    tally = dict(search=0, reports=0, skip=0, no_data=0, failed=0)
-    for seqid, (obsid, path) in sorted(seqs.items()):
+    print(f"\n{t_pass}: {len(seqs)} sequence(s) in the last {days} days")
+    tally = dict(search=0, reports=0, skip=0, no_data=0)
+    ran, failed = [], []
+    for seqid, (obsid, path, _, _) in sorted(seqs.items()):
         cnt = row_counts(seq_files(path, seqid))
         r = cur.execute(
             f"SELECT {', '.join(PREV)} FROM seq_status WHERE seqid=?", (seqid,)
@@ -175,7 +278,7 @@ def one_pass(args, cfg):
         conn.commit()
         rc, err = run_seq(args.config, path, act)
         if rc != 0:
-            tally["failed"] += 1
+            failed.append(seqid)
             upsert(
                 cur,
                 "seq_status",
@@ -184,6 +287,8 @@ def one_pass(args, cfg):
             )
             conn.commit()
             print(f"  FAILED: {err}")
+        else:
+            ran.append((seqid, act))
     cutoff = (Time.now() - days * u.day).isot
     nuids = [
         x[0]
@@ -192,35 +297,28 @@ def one_pass(args, cfg):
             (cutoff,),
         ).fetchall()
     ]
-    new_matches = (
-        []
-        if args.dry_run
-        else ts_match(cur, cfg["sings-paths"]["ts-queue-db"], nuids, c["ts_match_s"])
+    if not args.dry_run:
+        for nb, nt in ts_match(
+            cur, cfg["sings-paths"]["ts-queue-db"], nuids, c["ts_match_s"]
+        ):
+            print(f"new match {nb} <-> {nt}")
+    new = cur.execute(
+        "SELECT nuid, algos FROM candidates WHERE first_seen_utc>=? ORDER BY trigger_utc",
+        (t_pass,),
+    ).fetchall()
+    cand_dir = os.path.join(bp["bs_products_dir"], bp["cand_dir"])
+    n_new = alert_new(cur, rep, cand_dir, cutoff)
+    n_coinc = alert_coinc(cur, rep, cutoff)
+    conn.commit()
+    print(
+        f"pass {t_pass}: {tally} failed {len(failed)}  active (last {days} d): {len(nuids)}  "
+        f"alerts {'sent' if rep[0] else 'pending'}: new {n_new}, coinc {n_coinc}"
     )
-    for nb, nt in new_matches:
-        print(f"new match {nb} <-> {nt}")
-    send = (
-        c["slack_bs_reports_status"]
-        and c["slack_bs_reports_id"]
-        and not args.no_slack
-        and not args.dry_run
-    )
-    n_alert = slack_new(
-        cur, c, os.path.join(bp["bs_products_dir"], bp["cand_dir"]), cutoff, send
-    )
+    if ran or failed or new:
+        post(*log, status_msg(cur, seqs, ran, failed, new, now_utc()))
+    maybe_daily(cur, log, c.get("daily_update_hour", 5), args.dry_run)
     conn.commit()
     conn.close()
-    notify(
-        c,
-        f"NUBS pass {now_utc()}: {tally}  active candidates (last {days} d): {len(nuids)}  "
-        f"new matches: {len(new_matches)}  "
-        + (
-            f"alerts sent: {n_alert}"
-            if send
-            else f"alerts pending (slack off): {n_alert}"
-        ),
-        not args.no_slack and not args.dry_run,
-    )
 
 
 def parse_args():
@@ -242,23 +340,24 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     cfg = load_config(args.config)
-    c = cfg["bs_config"]
-    send = not args.no_slack and not args.dry_run
+    c, sl = cfg["bs_config"], cfg["slack"]
+    log = (
+        not args.no_slack and not args.dry_run and sl["slack_bs_log_status"],
+        sl["slack_bs_log_id"],
+    )
     try:
-        notify(
-            c, "Starting the NuSTAR SINGS blind search queue.", send and not args.once
-        )
+        if not args.once:
+            post(*log, "Starting the NuSTAR SINGS blind search queue.")
         while True:
             try:
                 one_pass(args, cfg)
             except Exception as e:
                 traceback.print_exc()
-                notify(c, f"Error in the NuSTAR SINGS blind search queue: {e}", send)
+                post(*log, f"Error in the NuSTAR SINGS blind search queue: {e}")
             if args.once:
                 break
             print(f"Sleeping for {c['interval']} seconds...")
             time.sleep(c["interval"])
     except KeyboardInterrupt:
-        notify(
-            c, "Stopping the NuSTAR SINGS blind search queue.", send and not args.once
-        )
+        if not args.once:
+            post(*log, "Stopping the NuSTAR SINGS blind search queue.")
