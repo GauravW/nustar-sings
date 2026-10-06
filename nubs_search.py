@@ -133,6 +133,14 @@ CAND_COLS = dict(
     last_updated_utc="TEXT",
     tag="TEXT",
     git_hash="TEXT",
+    lon_start="REAL",
+    lat_start="REAL",
+    lon_stop="REAL",
+    lat_stop="REAL",
+    saa_dist_deg="REAL",
+    saa_dt_s="REAL",
+    hilo_excess="REAL",
+    reject_reason="TEXT",
 )
 TRIG_COLS = dict(
     trigger_id="TEXT",
@@ -178,6 +186,10 @@ def met2utc(met):
 
 def nubs_name(met):
     return f"NUBS{ns.met_to_time(met).strftime('%Y%m%dT%H%M%S')}"
+
+
+def _num(v, fmt):
+    return "n/a" if v is None else format(v, fmt)
 
 
 def phash(d):
@@ -235,6 +247,9 @@ def init_db(conn):
     ensure_table(cur, "candidates", cand, "nuid")
     ensure_table(cur, "nu_bs_ts_match", MATCH_COLS, "nubs_id, nuts_id")
     ensure_table(cur, "queue_state", dict(key="TEXT", value="TEXT"), "key")
+    cur.execute(
+        "CREATE VIEW IF NOT EXISTS saa_reject AS SELECT * FROM candidates WHERE status='saa_reject'"
+    )
     conn.commit()
 
 
@@ -281,12 +296,13 @@ def load_data(f):
     hkb = _uniq(fits.getdata(f["hkb"], "HK1FPM"))
     att = _uniq(fits.getdata(f["att"], 1))
     t = np.asarray(hka["TIME"], float)
+    tb = np.asarray(hkb["TIME"], float)
     return dict(
         t=t,
         a=np.asarray(hka["SHLDLO"], float),
-        b=np.interp(
-            t, np.asarray(hkb["TIME"], float), np.asarray(hkb["SHLDLO"], float)
-        ),
+        b=np.interp(t, tb, np.asarray(hkb["SHLDLO"], float)),
+        ha=np.asarray(hka["SHLDHI"], float),
+        hb=np.interp(t, tb, np.asarray(hkb["SHLDHI"], float)),
         lat=np.interp(
             t, np.asarray(att["TIME"], float), np.asarray(att["SAT_LAT"], float)
         ),
@@ -313,6 +329,7 @@ def build_windows(d, c):
         ba, bb = running_median(a, c["w_base"]), running_median(b, c["w_base"])
         sa = (a - ba) / np.sqrt(np.maximum(ba, 1))
         sb = (b - bb) / np.sqrt(np.maximum(bb, 1))
+        ha, hb = d["ha"][blk], d["hb"][blk]
         wins.append(
             dict(
                 idx=len(wins),
@@ -323,6 +340,10 @@ def build_windows(d, c):
                 bb=bb,
                 sa=sa,
                 sb=sb,
+                ha=ha,
+                hb=hb,
+                hba=running_median(ha, c["w_base"]),
+                hbb=running_median(hb, c["w_base"]),
                 sc=(sa + sb) / np.sqrt(2),
             )
         )
@@ -395,14 +416,65 @@ def new_nuid(cur, met, taken):
         met += 1
 
 
-def assign(cur, chains, seqid, gap):
+def poly_dist(lon, lat, poly):
+    """Angular distance (deg, flat lon/lat) from each point to the polygon; 0 inside. Handles the 0/360 wrap."""
+    P = np.asarray(poly, float)
+    best = np.full(len(lon), np.inf)
+    for shift in (-360, 0, 360):
+        x = np.asarray(lon, float) + shift
+        for a, b in zip(P[:-1], P[1:]):
+            ab = b - a
+            u = np.clip(((x - a[0]) * ab[0] + (lat - a[1]) * ab[1]) / (ab @ ab), 0, 1)
+            best = np.minimum(
+                best, np.hypot(x - a[0] - u * ab[0], lat - a[1] - u * ab[1])
+            )
+    best[Path(poly).contains_points(np.column_stack([np.asarray(lon) % 360, lat]))] = (
+        0.0
+    )
+    return best
+
+
+def cand_features(ch, d, inside, wins, c):
+    t0, t1 = min(x["t0_met"] for x in ch), max(x["t1_met"] for x in ch)
+    i0, i1 = np.searchsorted(d["t"], [t0, t1])
+    i1 = min(max(i1, i0), len(d["t"]) - 1)
+    sel = slice(i0, i1 + 1)
+    dist = float(poly_dist(d["lon"][sel], d["lat"][sel], c["saa_polygon"]).min())
+    ti = d["t"][inside]
+    gaps = [t0 - ti[ti <= t0].max()] if (ti <= t0).any() else []
+    gaps += [ti[ti >= t1].min() - t1] if (ti >= t1).any() else []
+    w = next(x for x in wins if x["idx"] == ch[0]["widx"])
+    m = (w["tt"] >= t0) & (w["tt"] <= t1)
+    dlo = float(np.sum(w["a"][m] - w["ba"][m] + w["b"][m] - w["bb"][m]))
+    dhi = float(np.sum(w["ha"][m] - w["hba"][m] + w["hb"][m] - w["hbb"][m]))
+    r = c["saa_reject"]
+    rej = dist <= r["near_deg"] and (t1 - t0) >= r["min_dur_s"]
+    return dict(
+        lon_start=float(d["lon"][i0]),
+        lat_start=float(d["lat"][i0]),
+        lon_stop=float(d["lon"][i1]),
+        lat_stop=float(d["lat"][i1]),
+        saa_dist_deg=dist,
+        saa_dt_s=float(min(gaps)) if gaps else None,
+        hilo_excess=dhi / dlo if dlo > 0 else None,
+        status="saa_reject" if rej else "active",
+        reject_reason=(
+            f"saa_dist {dist:.1f} deg <= {r['near_deg']}, span {t1 - t0:.0f} s >= "
+            f"{r['min_dur_s']}"
+        )
+        if rej
+        else None,
+    )
+
+
+def assign(cur, chains, feats, seqid, gap):
     old = cur.execute(
         "SELECT nuid, t_start_met, t_stop_met, signature, status FROM candidates "
         "WHERE seqid=? ORDER BY t_start_met",
         (seqid,),
     ).fetchall()
     used, cands = set(), []
-    for ch in chains:
+    for ch, ft in zip(chains, feats):
         t0, t1 = min(x["t0_met"] for x in ch), max(x["t1_met"] for x in ch)
         hits = [
             o for o in old if o[0] not in used and o[1] - gap <= t1 and o[2] + gap >= t0
@@ -412,7 +484,7 @@ def assign(cur, chains, seqid, gap):
             nuid = hits[0][0]
             action = (
                 "unchanged"
-                if (sig == hits[0][3] and hits[0][4] == "active" and len(hits) == 1)
+                if (sig == hits[0][3] and hits[0][4] == ft["status"] and len(hits) == 1)
                 else "updated"
             )
             used.update(o[0] for o in hits)
@@ -427,10 +499,11 @@ def assign(cur, chains, seqid, gap):
                 t1=t1,
                 sig=sig,
                 action=action,
+                ft=ft,
                 merged=[o[0] for o in hits[1:]],
             )
         )
-    gone = [o[0] for o in old if o[0] not in used and o[4] == "active"]
+    gone = [o[0] for o in old if o[0] not in used and o[4] in ("active", "saa_reject")]
     return cands, gone
 
 
@@ -452,11 +525,11 @@ def cand_row(cd, obsid, seqid, run_utc, tag, git):
         algos=json.dumps(sorted({x["algo"] for x in ch})),
         trigger_ids=json.dumps([x["trigger_id"] for x in ch]),
         signature=cd["sig"],
-        status="active",
         merged_into=None,
         last_updated_utc=run_utc,
         tag=tag,
         git_hash=git,
+        **cd["ft"],
     )
     for a in ALGOS:
         sel = [x[ALGOS[a]["rank"]] for x in ch if x["algo"] == a]
@@ -1029,12 +1102,16 @@ def main():
 
     trigs, aux = run_algos(run_wins, algos, c, hashes, seqid)
     chains = group(trigs, c["group_gap_s"])
-    cands, gone = assign(cur, chains, seqid, c["group_gap_s"])
+    feats = [cand_features(ch, d, inside, wins, c) for ch in chains]
+    cands, gone = assign(cur, chains, feats, seqid, c["group_gap_s"])
     log.info(f"{len(trigs)} trigger(s) -> {len(cands)} candidate(s)")
     for cd in cands:
         log.info(
             f"  {cd['nuid']}  {cd['action']:<9}  {cd['sig']:<10}  {met2utc(cd['t0'])}  "
-            f"span {cd['t1'] - cd['t0']:.0f}s  w{cd['chain'][0]['widx']:02d}"
+            f"span {cd['t1'] - cd['t0']:.0f}s  w{cd['chain'][0]['widx']:02d}  "
+            f"saa {cd['ft']['saa_dist_deg']:.1f} deg / {_num(cd['ft']['saa_dt_s'], '.0f')} s  "
+            f"hi/lo {_num(cd['ft']['hilo_excess'], '.3f')}"
+            + ("  [SAA-REJECT]" if cd["ft"]["status"] == "saa_reject" else "")
             + (f"  merged {cd['merged']}" if cd["merged"] else "")
         )
     for g in gone:
@@ -1089,6 +1166,17 @@ def main():
         st = cur.execute(
             "SELECT report_status FROM candidates WHERE nuid=?", (cd["nuid"],)
         ).fetchone()[0]
+        if (
+            cd["ft"]["status"] == "saa_reject"
+            and not c["saa_reject"]["reports"]
+            and not args.force_report
+        ):
+            if st != "done":
+                cur.execute(
+                    "UPDATE candidates SET report_status='skipped' WHERE nuid=?",
+                    (cd["nuid"],),
+                )
+            continue
         if args.no_report or not (
             args.force_report or cd["action"] != "unchanged" or st != "done"
         ):

@@ -33,7 +33,7 @@ bs_paths:
 
 bs_config:
   interval: 1800            # s between queue passes
-  back_search_days: 1      # seqs scheduled in this lookback are checked for new data
+  back_search_days: 3      # seqs scheduled in this lookback are checked for new data
   hk_min_new_rows: 100      # HK rows added since last run -> full rerun of the seq
   evt_min_new_rows: 100     # event rows added (HK unchanged) -> reports-only rerun
   group_gap_s: 100          # t0_new - t1_prev <= this -> same candidate
@@ -60,3 +60,7 @@ bs_config:
     min_bb_bins: 32
     edge_pad: 64
     merge_gap: 20
+  saa_reject:
+    near_deg: 5        # candidate ground track within this many degrees of the SAA polygon.
+    min_dur_s: 100      # candidate span at least this long -> status saa_reject (no alerts)
+    reports: false      # run make_grb_report for rejected candidates too
