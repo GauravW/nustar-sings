@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<a href="{{ url_for('scan', page=return_page, **filters) }}">← Back to scanning</a>
+<h1>{{ row['NuID'] }}</h1>
+<p class="search-kind">{{ row.search_type|title }} search</p>
+<div class="candidate-layout">
+    <div><section class="card"><h2>Candidate information</h2><dl class="details">
+        {% for label, field in [('Trigger time','trigger_time'), ('Right ascension','ra'), ('Declination','dec'), ('Missions','missions_list'), ('Position owner','position_owner'), ('Processing status','queue_status'), ('Notice time','position_owner_notice_time')] %}
+        <dt>{{ label }}</dt><dd>{{ row[field] if row[field] is not none and row[field] != '' else 'Unavailable' }}</dd>{% endfor %}
+        <dt>Matching NuID</dt><dd>
+        {% if matches is none %}Pipeline matching unavailable.
+        {% elif not matches %}No pipeline matches recorded.
+        {% else %}{% for match in matches %}{% if match.available %}<a href="{{ url_for('candidate', candidate_id=match.NuID) }}">{{ match.NuID }}</a>{% else %}{{ match.NuID }} (record unavailable){% endif %} ({{ '%.1f'|format(match.delta_seconds|abs) }} s {{ 'before' if match.delta_seconds < 0 else 'after' }}){% if not loop.last %}<br>{% endif %}{% endfor %}{% endif %}
+        <p class="muted">Pipeline candidate-span matches; not confirmation of a shared event.</p></dd>
+    </dl></section>
+    {% if blind %}
+    {% if blind.status in ['merged','gone'] %}<p class="notice">Pipeline status: {{ blind.status }}. Review history is retained.
+    {% if blind.merged_into %}{% if merged_available %}<a href="{{ url_for('candidate',candidate_id=blind.merged_into) }}">Merged into {{ blind.merged_into }}</a>{% else %}Merged into {{ blind.merged_into }} (record unavailable){% endif %}{% endif %}</p>{% endif %}
+    <section class="card"><h2>Blind-search summary</h2>
+        {% if observation_available %}<p><a href="{{ url_for('observations.detail', seqid=blind.seqid, window=blind.widx) }}#windows">View observation products · {{ blind.seqid }} / window {{ blind.widx }}</a></p>{% endif %}
+        {% if observation_available %}<div class="product-actions">{% for view,label in [('shield','Shield rates'),('mf','Matched Filter'),('bb','Bayesian Blocks')] %}<a class="button secondary" href="{{ url_for('observations.detail',seqid=blind.seqid,window=blind.widx,view=view) }}#windows">{{ label }}</a>{% endfor %}</div>{% endif %}
+        <p class="muted">Pipeline results are separate from your review classification.</p>
+        <dl class="details">{% for field, label in blind_summary_fields %}
+            <dt>{{ label }}</dt><dd>{% if field in ['obsid','seqid'] and observation_available %}<a href="{{ url_for('observations.detail', seqid=blind.seqid, window=blind.widx) }}#windows">{{ blind[field] }}</a>{% else %}{{ blind[field] if blind[field] is not none and blind[field] != '' else 'Unavailable' }}{% endif %}</dd>
+        {% endfor %}</dl>
+    </section>
+    <section class="card"><h2>SAA context</h2><dl class="details">
+        {% for field, label in blind_context_fields %}<dt>{{ label }}</dt><dd>{{ blind[field] if blind[field] is not none else 'Unavailable' }}</dd>{% endfor %}
+    </dl><p class="muted">Longitude and latitude are not celestial RA/Dec.</p></section>
+    <details class="card"><summary>Additional blind-search details</summary><dl class="details">
+        {% set shown = (blind_summary_fields|map(attribute=0)|list) + (blind_context_fields|map(attribute=0)|list) %}
+        {% for field in blind.keys() if field not in shown and field != 'nuid' %}
+        <dt>{{ field|replace('_', ' ')|capitalize }}{% if field == 'tag' %} (pipeline){% endif %}</dt><dd>{{ blind[field] if blind[field] is not none and blind[field] != '' else 'Unavailable' }}</dd>
+        {% endfor %}
+    </dl></details>
+    {% endif %}
+    <section class="card"><h2>Classification</h2><span class="badge" style="border-left:4px solid {{ tags[row['classification_tag']][2] }}">{{ tags[row['classification_tag']][0] }}</span>
+    <p>Updated by {{ row['classification_updated_by'] or 'Not yet reviewed' }}</p>
+    <p class="muted">{{ row['classification_updated_at'] or 'No classification changes recorded' }}</p>
+    <form method="post" action="{{ url_for('classify_candidate', candidate_id=row.NuID) }}" class="detail-review">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <input type="hidden" name="detail_token" value="{{ detail_token }}">
+        <label>Classification<select name="classification">{% for value, tag in tags.items() %}<option value="{{ value }}" {% if value == row.classification_tag %}selected{% endif %}>{{ tag[0] }}</option>{% endfor %}</select></label>
+        {% include "components/reviewer.html" %}
+        <label>Reason / note (optional)<textarea name="reason" maxlength="500" rows="3"></textarea></label>
+        <p class="muted">Notes are saved with classification changes.</p>
+        <button class="button" type="submit">Save classification</button>
+    </form></section></div>
+    <section class="card"><h2>Reports and signal products</h2>
+    {% if blind and blind.report_status == 'skipped' %}<p class="notice">Report generation was skipped by the pipeline. {{ blind.reject_reason or '' }}</p>{% endif %}
+    {% for product in products %}{% include "components/product-card.html" %}
+    {% else %}<p class="muted">No products supplied for this candidate.</p>
+        {% if row.queue_status in ['pending','processing'] %}<p>Pipeline status: {{ row.queue_status }}.</p>{% endif %}
+    {% endfor %}
+    </section>
+</div>
+{% if row.search_type == 'triggered' %}
+<section class="card"><h2>Pipeline blind-search matches</h2>
+<p class="muted">Matches are read from nu_bs_ts_match. The pipeline compares triggered events to the blind candidate span with its configured tolerance. Classifications remain independent.</p>
+{% if matches is none %}<p>Time matching unavailable: this trigger has no valid timestamp.</p>
+{% elif not matches %}<p>No pipeline matches recorded.</p>
+{% else %}<div class="table-wrapper"><table>
+<thead><tr><th>NUID</th><th>Trigger time</th><th>Time difference</th><th>Duration (s)</th><th>Algorithms</th><th>Pipeline status</th><th>Classification</th></tr></thead>
+<tbody>{% for match in matches %}<tr>
+<td>{% if match.available %}<a href="{{ url_for('candidate', candidate_id=match.NuID, page=return_page, **filters) }}">{{ match.NuID }}</a>{% else %}{{ match.NuID }} (record unavailable){% endif %}</td>
+<td>{{ match.trigger_time }}</td><td>{{ '%.3f'|format(match.delta_seconds|abs) }} s {{ 'before' if match.delta_seconds < 0 else ('after' if match.delta_seconds > 0 else '(same time)') }}</td>
+<td>{{ match.duration if match.duration is not none else 'Unavailable' }}</td><td>{{ match.algos or 'Unavailable' }}</td>
+<td>{{ match.pipeline_status or match.queue_status or 'Unavailable' }}</td><td>{{ tags[match.classification_tag][0] }}</td>
+</tr>{% endfor %}</tbody></table></div>{% endif %}</section>
+{% endif %}
+{% if events %}<section class="card"><h2>External mission events</h2><ul>{% for event in events %}<li>{{ event.mission }} · {{ event.event_id or 'No event ID' }} {% if event.url|safe_product_url %}<a href="{{ event.url|safe_product_url }}" target="_blank" rel="noopener noreferrer">Open event ↗</a>{% endif %}</li>{% endfor %}</ul></section>{% endif %}
+<section class="card"><h2>Review history</h2><div class="table-wrapper"><table>
+<thead><tr><th>Time (UTC)</th><th>Change</th><th>Reviewer</th><th>Reason</th></tr></thead>
+<tbody>{% for entry in history %}<tr><td>{{ entry.created_at }}</td><td>{{ tags[entry.old_value][0] if entry.old_value in tags else (entry.old_value or 'Initialized') }} → {{ tags[entry.new_value][0] if entry.new_value in tags else (entry.new_value or '—') }}</td><td>{{ entry.reviewer }}</td><td>{{ entry.reason or '—' }}</td></tr>{% else %}<tr><td colspan="4">No history recorded.</td></tr>{% endfor %}</tbody>
+</table></div></section>
+{% endblock %}

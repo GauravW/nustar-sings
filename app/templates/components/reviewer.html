@@ -1,0 +1,11 @@
+<div class="reviewer-control">
+    <label>Reviewer<select name="reviewer" class="reviewer-select" required>
+        <option value="">Choose reviewer</option>
+        {% for value, label in [('kush','Kush'),('gaurav','Gaurav'),('brian','Brian'),('other','Other — enter name')] %}
+        <option value="{{ value }}" {% if session.get('reviewer_choice') == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+    </select></label>
+    <label class="custom-reviewer">Reviewer name (for Other)
+        <input name="reviewer_name" maxlength="100" value="{{ session.get('reviewer_name', '') }}" autocomplete="name">
+    </label>
+</div>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page_title }} - GRB</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script defer src="{{ url_for('static', filename='js/main.js') }}"></script>
+</head>
+<body>
+    {% include "components/side-nav.html" %}
+    <div class="workspace">
+        {% include "components/header.html" %}
+        <main class="{% block main_class %}{% endblock %}">
+            {% for message in get_flashed_messages() %}<div class="notice" role="status">{{ message }}</div>{% endfor %}
+            {% block content %}{% endblock %}
+        </main>
+        {% include "components/footer.html" %}
+    </div>
+<dialog id="image-popup" aria-labelledby="image-popup-title">
+    <div class="popup-toolbar"><h2 id="image-popup-title">Product image</h2><button type="button" class="button secondary" id="image-popup-close" autofocus>Close</button></div>
+    <p><a id="image-popup-full" target="_blank" rel="noopener noreferrer">Open full-size image ↗</a></p>
+    <p id="image-popup-error" hidden role="status">Image unavailable.</p>
+    <div class="popup-image-area"><img id="image-popup-image" alt=""></div>
+</dialog>
+</body>
+</html>

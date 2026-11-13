@@ -1,0 +1,12 @@
+<aside class="sidebar" id="sidebar">
+    <a class="brand" href="{{ url_for('home') }}">NuSTAR - GRB</a>
+    <nav aria-label="Main navigation">
+        <a href="{{ url_for('home') }}" class="{{ 'active' if active == 'home' else '' }}">Home</a>
+        <a href="{{ url_for('scan') }}" class="{{ 'active' if active == 'scan' else '' }}">Scanning</a>
+        <a href="{{ url_for('observations.listing') }}" class="{{ 'active' if active == 'observations' else '' }}">Observation Products</a>
+    </nav>
+    <div class="profile">
+        <strong>{{ reviewer }}</strong>
+        <small>{{ reviewer_email }}</small>
+    </div>
+</aside>

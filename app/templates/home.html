@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block main_class %}home-main{% endblock %}
+{% block content %}
+<h1>Candidate overview</h1>
+<p class="muted">Filter candidates and explore classifications.</p>
+{% include "components/filters.html" %}
+<p class="search-counts">Matching records: <strong>{{ search_counts.get('triggered', 0) }} Triggered</strong> · <strong>{{ search_counts.get('blind', 0) }} Blind</strong></p>
+<p class="muted">Counts represent search records, not necessarily distinct astrophysical events.</p>
+<section class="card">
+    <div class="section-heading"><div><h2>Candidates by classification</h2><p class="muted">{{ total }} candidates match your filters.</p></div>
+        <a class="button" href="{{ url_for('scan', **filters) }}">Open scanning →</a></div>
+    {% if total %}
+    <div class="chart-layout">
+        <div class="donut-wrapper">
+            <canvas id="classification-chart" aria-label="Candidate counts by classification; values are listed in the adjacent table." role="img"></canvas>
+            <div class="donut-total"><strong>{{ total }}</strong><span>Candidates</span></div>
+        </div>
+    {% else %}<p>No candidates match these filters. Clear or adjust the filters to try again.</p><div>{% endif %}
+        <div class="table-wrapper"><table class="classification-table">
+            <thead><tr><th>Classification</th><th>Count</th><th>Share</th></tr></thead>
+            <tbody>{% for item in counts %}<tr><td><span class="swatch" style="background: {{ item.color }}"></span><a href="{{ item.url }}">{{ item.label }}</a></td><td>{{ item.count }}</td><td>{{ '%.1f'|format(item.count / total * 100 if total else 0) }}%</td></tr>{% endfor %}</tbody>
+        </table><p class="muted">Select a classification to open matching candidates.</p></div>
+    </div>
+</section>
+<script id="chart-data" type="application/json">{{ counts|tojson }}</script>
+<script defer src="{{ url_for('static', filename='vendor/chart.umd.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/home-chart.js') }}"></script>
+{% endblock %}

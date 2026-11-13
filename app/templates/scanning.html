@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block main_class %}scanning-main{% endblock %}
+{% block content %}
+<h1>Scan candidates</h1>
+<p class="muted">{{ total }} candidates match your filters.</p>
+{% include "components/filters.html" %}
+<section class="card">
+<form method="post" action="{{ url_for('classify') }}" id="bulk-form">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <input type="hidden" name="page_token" value="{{ page_token }}">
+    <div class="bulk-toolbar">
+        <label class="checkbox-label"><input type="checkbox" id="select-page">Select this page</label>
+        <strong id="selection-count" aria-live="polite">0 selected</strong>
+        <label>Assign classification<select name="classification" id="bulk-tag">{% for value, tag in tags.items() %}<option value="{{ value }}">{{ tag[0] }}</option>{% endfor %}</select></label>
+        {% include "components/reviewer.html" %}
+        <button class="button bulk-action" name="action" value="apply">Apply</button>
+        <button class="button danger bulk-action" name="action" value="discard">Mark Discard</button>
+    </div>
+    <label class="reason-label">Reason (optional)<input name="reason" maxlength="500" placeholder="Reason for this classification change"></label>
+    <p class="muted">Selection applies to this page only. Discard keeps the record and its history. Triggered and blind groups save separately; any failed group is reported.</p>
+    <div class="table-wrapper scan-table-wrapper" role="region" aria-label="Candidates"><table class="scan-table">
+        <colgroup><col class="col-select"><col class="col-nuid"><col class="col-type"><col class="col-time"><col class="col-coordinate"><col class="col-coordinate"><col class="col-missions"><col class="col-plot"><col class="col-plot"><col class="col-plot"><col class="col-tag"></colgroup>
+        <thead><tr><th>Select</th><th>NUID</th><th>Search type</th><th>Trigger time</th><th>RA</th><th>Dec</th><th>Missions</th><th>Shield lightcurve</th><th>Solar flare</th><th>SAA</th><th>Tag</th></tr></thead>
+        <tbody>{% for row in rows %}<tr>
+            <td data-label="Select"><input class="row-checkbox" type="checkbox" name="selected" value="{{ row['NuID'] }}" aria-label="Select {{ row['NuID'] }}"></td>
+            <td data-label="NUID"><a href="{{ url_for('candidate', candidate_id=row['NuID'], page=page, **filters) }}">{{ row['NuID'] }}</a></td>
+            <td data-label="Search type">{{ row['search_type']|title }}</td>
+            <td data-label="Trigger time">{{ row['trigger_time'] or '—' }}</td><td data-label="RA">{{ row['ra'] if row['ra'] is not none else '—' }}</td><td data-label="Dec">{{ row['dec'] if row['dec'] is not none else '—' }}</td>
+            <td data-label="Missions">{{ row['missions_list'] or '—' }}</td>
+            {% for kind, label in [('csi','Shield lightcurve'), ('solar','Solar flare'), ('saa','SAA')] %}
+            <td class="thumbnail-cell" data-label="{{ label }}">
+                {% set image = thumbnails[row['NuID']].get('csi' if kind == 'csi' else 'report')|safe_product_url %}
+                {% if image %}<a class="{{ 'report-preview report-' ~ kind if kind != 'csi' else '' }}" data-image-popup data-image-title="{{ label }} · {{ row.NuID }}{{ ' · Combined report' if kind != 'csi' else '' }}" href="{{ image }}"><img class="signal-image scan-thumbnail" loading="lazy" src="{{ image }}" alt="{{ label }} for {{ row.NuID }}"></a><span class="image-unavailable" hidden>Unavailable</span>
+                {% else %}<span class="muted">Unavailable</span>{% endif %}
+            </td>{% endfor %}
+            <td data-label="Tag"><span class="badge" style="border-left: 4px solid {{ tags[row['classification_tag']][2] }}">{{ tags[row['classification_tag']][0] }}</span></td>
+        </tr>{% else %}<tr><td colspan="11">No candidates match these filters.</td></tr>{% endfor %}</tbody>
+    </table></div>
+</form>
+{% include "components/pagination.html" %}
+</section>
+<script defer src="{{ url_for('static', filename='js/scanning.js') }}"></script>
+{% endblock %}

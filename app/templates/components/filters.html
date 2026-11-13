@@ -1,0 +1,30 @@
+<section class="card filter-card">
+    <h2>Find candidates</h2>
+    <form method="get" action="{{ url_for(active) }}">
+        <div class="form-grid search-grid">
+            <label>Search type<select name="search_type"><option value="">All searches</option>
+                <option value="triggered" {% if filters.search_type == 'triggered' %}selected{% endif %}>Triggered</option>
+                <option value="blind" {% if filters.search_type == 'blind' %}selected{% endif %}>Blind</option>
+            </select></label>
+            <label>Observation / sequence ID<input name="observation" value="{{ filters.observation }}" placeholder="Blind search only"></label>
+            <label>NUID<input name="nuid" value="{{ filters.nuid }}" placeholder="Search NUID"></label>
+            <label>Position owner<select name="owner">
+                <option value="">All owners</option>
+                <option value="__unknown__" {% if filters.owner == '__unknown__' %}selected{% endif %}>Unknown</option>
+                {% for owner in options.owners %}<option {% if filters.owner == owner %}selected{% endif %}>{{ owner }}</option>{% endfor %}
+            </select></label>
+            <label>Mission<select name="mission"><option value="">All missions</option>
+                {% for mission in options.missions %}<option {% if filters.mission == mission %}selected{% endif %}>{{ mission }}</option>{% endfor %}
+            </select></label>
+            <label>Classification<select name="tag"><option value="">All classifications</option>
+                {% for value, tag in tags.items() %}<option value="{{ value }}" {% if filters.tag == value %}selected{% endif %}>{{ tag[0] }}</option>{% endfor %}
+            </select></label>
+            <label>Start date<input type="date" name="start" value="{{ filters.start }}"></label>
+            <label>End date<input type="date" name="end" value="{{ filters.end }}"></label>
+            <label>Processing status<select name="status"><option value="">All statuses</option>
+                {% for status in options.statuses %}<option {% if filters.status == status %}selected{% endif %}>{{ status }}</option>{% endfor %}
+            </select></label>
+            <div class="form-actions"><button class="button" type="submit">Apply filters</button><a class="button secondary" href="{{ url_for(active) }}">Clear</a></div>
+        </div>
+    </form>
+</section>

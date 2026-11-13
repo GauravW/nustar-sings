@@ -1,0 +1,13 @@
+<article class="signal-product">
+    <h3>{{ product.label }}</h3>
+    {% set preview = product.thumbnail_url|safe_product_url %}
+    {% set target = product.url|safe_product_url %}
+    {% if preview %}
+    <a data-image-popup href="{{ preview }}" target="_blank" rel="noopener noreferrer"><img class="signal-image" loading="lazy" src="{{ preview }}" alt="{{ product.label }} for {{ row['NuID'] }}"></a>
+    <p class="image-unavailable" hidden>Image unavailable.</p>
+    {% else %}<p class="muted">Image not available.</p>{% endif %}
+    <div class="product-actions">
+        {% if preview %}<a data-image-popup class="button secondary" href="{{ preview }}" target="_blank" rel="noopener noreferrer">View image</a>{% endif %}
+        {% if target %}<a class="button" href="{{ target }}" target="_blank" rel="noopener noreferrer">{{ product.link_label }} ↗</a>{% elif product.provenance == 'pipeline' %}<span class="muted">PDF not supplied or unavailable.</span>{% endif %}
+    </div>
+</article>

@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block main_class %}scanning-main{% endblock %}
+{% block content %}
+<h1>Observation Products</h1>
+<p class="muted">Explore observation sequences, search windows, and related blind candidates.</p>
+<form class="card" method="get">
+<div class="form-grid search-grid">
+<label>Sequence or observation<input name="q" value="{{ filters.q }}" placeholder="Sequence ID or target"></label>
+<label>From date · UTC<input type="date" name="start" value="{{ filters.start }}"></label>
+<label>Through date · UTC<input type="date" name="end" value="{{ filters.end }}"></label>
+<label>Pipeline status<select name="status"><option value="">All</option>{% for value in ['searched','reports_only','no_data'] %}<option value="{{ value }}" {{ 'selected' if filters.status == value }}>{{ value|replace('_',' ')|title }}</option>{% endfor %}</select></label>
+<label>Has candidates<select name="has_candidates">{% for value, label in [('', 'All'),('yes','Yes'),('no','No')] %}<option value="{{ value }}" {{ 'selected' if filters.has_candidates == value }}>{{ label }}</option>{% endfor %}</select></label>
+<label>Overview available<select name="available">{% for value, label in [('', 'All'),('yes','Yes'),('no','No')] %}<option value="{{ value }}" {{ 'selected' if filters.available == value }}>{{ label }}</option>{% endfor %}</select></label>
+<div class="form-actions"><button class="button">Apply filters</button><a class="button secondary" href="{{ url_for('observations.listing') }}">Reset</a></div>
+</div></form>
+<section class="card"><h2>{{ total }} sequences</h2>
+<div class="scan-table-wrapper"><table class="scan-table observation-table">
+<thead><tr><th>Sequence ID</th><th>Observation / target</th><th>Search coverage · UTC</th><th>Overview</th><th>Windows</th><th>Candidates</th><th>Status</th></tr></thead>
+<tbody>{% for row in rows %}<tr>
+<td data-label="Sequence ID"><a href="{{ url_for('observations.detail', seqid=row.seqid) }}">{{ row.seqid }}</a></td>
+<td data-label="Observation / target">{{ row.obsid }}</td>
+<td data-label="Search coverage · UTC">{{ row.start or 'Unavailable' }}{% if row.end %}<br>to {{ row.end }}{% endif %}</td>
+<td data-label="Overview">{% if row.overview %}<a data-image-popup href="{{ row.overview }}" target="_blank" rel="noopener"><img class="scan-thumbnail" loading="lazy" src="{{ row.overview }}" alt="Overview for {{ row.seqid }}"></a>{% else %}<span class="muted">Unavailable</span>{% endif %}</td>
+<td data-label="Windows"><a href="{{ url_for('observations.detail', seqid=row.seqid) }}#windows">{{ row.windows }}</a></td>
+<td data-label="Candidates"><a href="{{ url_for('observations.detail', seqid=row.seqid) }}#candidates">{{ row.candidates }}</a></td>
+<td data-label="Status"><span class="badge">{{ row.status|replace('_',' ')|title }}</span></td>
+</tr>{% else %}<tr><td colspan="7">No observation sequences match these filters.</td></tr>{% endfor %}</tbody></table></div>
+{% include 'components/pagination.html' %}</section>
+{% endblock %}

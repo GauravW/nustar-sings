@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% block main_class %}scanning-main{% endblock %}
+{% block content %}
+<a href="{{ url_for('observations.listing') }}">← Observation Products</a>
+<h1>{{ row.seqid }}</h1><p>{{ row.obsid }} · <span class="badge">{{ row.status|replace('_',' ')|title }}</span></p>
+<nav class="product-actions" aria-label="Observation sections"><a href="#overview">Overview & window separation</a><a href="#windows">Window lightcurves & algorithms</a><a href="#candidates">Related candidates</a><a href="#processing">Processing information</a></nav>
+<section class="card"><h2>Sequence summary</h2><dl class="details">
+<dt>Search coverage · UTC</dt><dd>{{ coverage_start or 'Unavailable' }} — {{ coverage_end or 'Unavailable' }}</dd>
+<dt>Windows / candidates</dt><dd>{{ windows|length }} / {{ candidates|length }}</dd>
+<dt>Last search · UTC</dt><dd>{{ search.run_utc if search else 'Unavailable' }}</dd>
+<dt>Exposure · seconds</dt><dd>{{ '%.1f'|format(search.exp_s) if search and search.exp_s is not none else 'Unavailable' }}</dd>
+<dt>Time in SAA</dt><dd>{{ '%.1f%%'|format(search.saa_frac * 100) if search and search.saa_frac is not none else 'Unavailable' }}</dd>
+<dt>Latest processing</dt><dd>{{ runs[0].run_utc ~ ' · ' ~ runs[0].mode if runs else 'Unavailable' }}</dd>
+</dl><p class="muted">Coverage may contain gaps. Exposure and SAA fraction come from the latest search run.</p>
+{% if row.status == 'no_data' %}<p class="notice">The pipeline reported no data for this sequence. Products are unavailable.</p>{% endif %}
+{% if row.last_error %}<p>{{ row.last_error }}</p>{% endif %}</section>
+<section class="card" id="overview"><h2>Sequence overview and window separation</h2><p class="muted">Full-sequence shield rates, searched windows, SAA exclusions, and ground track.</p>
+{% set overview = products.get((-1, 'overview')) %}
+{% if overview %}<a data-image-popup href="{{ overview }}" target="_blank" rel="noopener">Open full-size overview</a><a data-image-popup href="{{ overview }}"><img class="signal-image" src="{{ overview }}" alt="Shield rates, search windows and orbital ground track for {{ row.seqid }}"></a><p class="image-unavailable" hidden>Image unavailable.</p>{% else %}<p class="muted">Overview unavailable.</p>{% endif %}</section>
+<section class="card" id="windows"><h2>Window lightcurves and algorithm results</h2><p class="muted">Shield Rates shows raw and detrended lightcurves. Matched Filter and Bayesian Blocks show the selected window’s algorithm diagnostics.</p>
+{% if window %}
+<form method="get" class="form-grid">
+<label>Search window<select name="window">{% for item in windows %}<option value="{{ item.widx }}" {{ 'selected' if item.widx == window.widx }}>w{{ '%02d'|format(item.widx) }} · {{ item.t0_utc }}</option>{% endfor %}</select></label>
+<label>Product<select name="view">{% for value,label in [('shield','Shield rates'),('mf','Matched Filter'),('bb','Bayesian Blocks')] %}<option value="{{ value }}" {{ 'selected' if kind == value }}>{{ label }}</option>{% endfor %}</select></label>
+<div class="form-actions"><button class="button">Show product</button></div></form>
+<p>{{ window.t0_utc }} — {{ window.t1_utc }} UTC · {{ window.dur_s }} seconds · {{ window.n_bins }} bins</p>
+<p>Window candidates: {% for candidate in candidates if candidate.widx == window.widx %}<a href="{{ url_for('candidate', candidate_id=candidate.NuID) }}">{{ candidate.NuID }}</a> {% else %}None{% endfor %}</p>
+{% set plot = products.get((window.widx, kind)) %}
+{% if plot %}<a data-image-popup href="{{ plot }}" target="_blank" rel="noopener">Open full-size image</a><a data-image-popup href="{{ plot }}"><img class="signal-image" loading="lazy" src="{{ plot }}" alt="{{ kind }} diagnostic for window {{ window.widx }}"></a><p class="image-unavailable" hidden>Image unavailable.</p>{% else %}<p class="muted">This window product is unavailable.</p>{% endif %}
+{% else %}<p class="muted">No search windows available.</p>{% endif %}</section>
+<section class="card" id="candidates"><h2>Related blind candidates</h2>
+<div class="scan-table-wrapper"><table class="scan-table"><thead><tr><th>NUID</th><th>Trigger · UTC</th><th>Window</th><th>Algorithms</th><th>Pipeline status</th><th>Classification</th></tr></thead><tbody>
+{% for candidate in candidates %}<tr><td data-label="NUID"><a href="{{ url_for('candidate', candidate_id=candidate.NuID) }}">{{ candidate.NuID }}</a></td><td data-label="Trigger · UTC">{{ candidate.trigger_time }}</td><td data-label="Window"><a href="{{ url_for('observations.detail',seqid=row.seqid,window=candidate.widx) }}#windows">{{ candidate.widx }}</a></td><td data-label="Algorithms">{{ candidate.algos }}</td><td data-label="Pipeline status">{{ candidate.status }}</td><td data-label="Classification">{{ candidate.classification_tag }}</td></tr>
+{% else %}<tr><td colspan="6">No blind candidates for this sequence.</td></tr>{% endfor %}</tbody></table></div></section>
+<details class="card" id="processing"><summary>Processing information · {{ runs|length }} runs</summary>
+{% if products.get((-1,'log')) %}<p><a href="{{ products[(-1,'log')] }}" target="_blank" rel="noopener">Open processing log</a></p>{% endif %}
+{% for run in runs %}<details class="run-details"><summary>{{ run.run_utc }} · {{ run.mode }}</summary><p>Git revision: {{ run.git_hash or 'Unavailable' }}</p><pre class="observation-parameters">{{ run.params_json or 'No parameters available' }}</pre></details>{% else %}<p>No processing runs available.</p>{% endfor %}</details>
+{% endblock %}
